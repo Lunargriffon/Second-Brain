@@ -24,3 +24,4 @@ class NormalizedDocument:
     media_urls: tuple[str, ...]
     source_created_at: str | None
     membership: SourceMembership
+    source_observed_at: str | None = None

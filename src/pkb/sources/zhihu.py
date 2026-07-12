@@ -47,6 +47,7 @@ class ZhihuAdapter:
             plain_content=_text(record.get("content")),
             media_urls=_string_urls(record.get("images")),
             source_created_at=_text(record.get("created_at")) or None,
+            source_observed_at=_text(record.get("saved_at")) or None,
             membership=SourceMembership(
                 source=self.source_name,
                 source_item_id=source_item_id,

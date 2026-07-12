@@ -39,7 +39,9 @@ def test_migration_creates_versioned_core_schema(tmp_path):
         )
     }
     assert CORE_TABLES <= tables
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(documents)")}
+    assert "source_observed_at" in columns
     assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
 
 
@@ -49,12 +51,12 @@ def test_migration_is_idempotent(tmp_path):
     migrate(connection)
     migrate(connection)
 
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
 
 
 def test_migration_rejects_database_from_a_newer_schema_version(tmp_path):
     connection = sqlite3.connect(tmp_path / "knowledge.db")
-    connection.execute("PRAGMA user_version = 4")
+    connection.execute("PRAGMA user_version = 5")
 
     with pytest.raises(RuntimeError, match="newer than supported"):
         migrate(connection)
@@ -283,7 +285,7 @@ def test_v1_to_v2_migration_creates_empty_external_content_search_projection(tmp
 
     migrate(connection)
 
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
     assert connection.execute("SELECT count(*) FROM documents_search_content").fetchone()[0] == 0
     sql = connection.execute(
         "SELECT sql FROM sqlite_master WHERE name='documents_fts'"

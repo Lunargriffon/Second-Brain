@@ -59,8 +59,9 @@ class KnowledgeRepository:
                     """INSERT INTO documents
                        (identity_key, source_type, title, author, plain_content,
                         canonical_url, source_created_at, source_content_hash,
-                        normalized_content_hash, normalization_version, schema_version)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)""",
+                        normalized_content_hash, normalization_version, schema_version,
+                        source_observed_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)""",
                     (
                         document.identity_key,
                         document.membership.source,
@@ -72,23 +73,35 @@ class KnowledgeRepository:
                         source_hash,
                         normalized_hash,
                         normalization_version,
+                        document.source_observed_at,
                     ),
                 )
                 document_id = int(cursor.lastrowid)
                 source_changed = normalized_changed = True
             else:
                 document_id = int(existing["id"])
-                incoming_wins = self._source_rank(document.membership.source) >= self._source_rank(existing["source_type"])
+                incoming_key = self._winner_key(
+                    document.membership.source, document.source_observed_at, source_hash
+                )
+                existing_key = self._winner_key(
+                    existing["source_type"], existing["source_observed_at"],
+                    existing["source_content_hash"],
+                )
+                incoming_wins = incoming_key >= existing_key
                 source_changed = incoming_wins and existing["source_content_hash"] != source_hash
                 normalized_changed = incoming_wins and (
                     existing["normalized_content_hash"] != normalized_hash
                     or existing["normalization_version"] != normalization_version
                 )
-                if incoming_wins:
+                winner_metadata_changed = (
+                    incoming_wins
+                    and existing["source_observed_at"] != document.source_observed_at
+                )
+                if incoming_wins and (source_changed or normalized_changed or winner_metadata_changed):
                     self.connection.execute(
                     """UPDATE documents SET title=?, author=?, plain_content=?,
                        canonical_url=?, source_created_at=?, source_type=?, source_content_hash=?,
-                       normalized_content_hash=?, normalization_version=?,
+                       normalized_content_hash=?, normalization_version=?, source_observed_at=?,
                        updated_at=CURRENT_TIMESTAMP WHERE id=?""",
                     (
                         document.title,
@@ -100,6 +113,7 @@ class KnowledgeRepository:
                         source_hash,
                         normalized_hash,
                         normalization_version,
+                        document.source_observed_at,
                         document_id,
                     ),
                     )
@@ -121,11 +135,12 @@ class KnowledgeRepository:
             self.connection.execute(
                 """INSERT INTO source_memberships
                    (document_id, source, source_item_id, collection_id, raw_path,
-                    raw_line, source_url)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                    raw_line, source_url, observed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(source, source_item_id, collection_id) DO UPDATE SET
                      document_id=excluded.document_id, raw_path=excluded.raw_path,
-                     raw_line=excluded.raw_line, source_url=excluded.source_url""",
+                     raw_line=excluded.raw_line, source_url=excluded.source_url,
+                     observed_at=excluded.observed_at""",
                 (
                     document_id,
                     membership.source,
@@ -134,9 +149,12 @@ class KnowledgeRepository:
                     str(membership.raw_path),
                     membership.raw_line,
                     membership.source_url,
+                    document.source_observed_at,
                 ),
             )
-            for order, remote_url in enumerate(document.media_urls):
+            if created or source_changed:
+                self.connection.execute("DELETE FROM media WHERE document_id=?", (document_id,))
+            for order, remote_url in enumerate(document.media_urls if created or source_changed else ()):
                 self.connection.execute(
                     """INSERT INTO media(document_id, remote_url, media_order)
                        VALUES (?, ?, ?) ON CONFLICT(document_id, remote_url)
@@ -179,6 +197,13 @@ class KnowledgeRepository:
     @staticmethod
     def _source_rank(source: str | None) -> int:
         return {"x": 10, "zhihu": 20}.get(source or "", 0)
+
+    @classmethod
+    def _winner_key(
+        cls, source: str | None, observed_at: str | None, source_hash: str
+    ) -> tuple[int, str, str]:
+        """Choose same-source evidence deterministically; timestamps outrank hashes."""
+        return (cls._source_rank(source), observed_at or "", source_hash)
 
     def merge_documents(
         self,

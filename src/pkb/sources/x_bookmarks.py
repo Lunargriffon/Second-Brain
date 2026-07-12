@@ -66,6 +66,12 @@ class XBookmarkAdapter:
             plain_content=content,
             media_urls=_string_items(record.get("media")),
             source_created_at=_text(record.get("postedAt")) or None,
+            source_observed_at=(
+                _text(record.get("saved_at"))
+                or _text(record.get("savedAt"))
+                or _text(record.get("bookmarkedAt"))
+                or None
+            ),
             membership=SourceMembership(
                 source=self.source_name,
                 source_item_id=source_item_id,

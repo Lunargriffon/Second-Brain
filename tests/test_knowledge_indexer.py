@@ -209,3 +209,76 @@ def test_report_serializes_to_json(repository: KnowledgeRepository, raw_dir: Pat
     report.write(target)
 
     assert json.loads(target.read_text(encoding="utf-8")) == report.to_dict()
+
+
+@pytest.mark.parametrize("newer_first", [False, True])
+def test_newest_same_source_observation_wins_independent_of_ingest_order(
+    repository: KnowledgeRepository, tmp_path: Path, newer_first: bool
+) -> None:
+    raw = tmp_path / "observations"
+    raw.mkdir()
+    older = _zhihu(content="older")
+    older.update(saved_at="2025-01-01T00:00:00Z", images=["https://img/old"])
+    newer = _zhihu(content="newer")
+    newer.update(saved_at="2025-02-01T00:00:00Z", images=["https://img/new"])
+    records = (
+        [("zhihu-10.jsonl", newer), ("zhihu-20.jsonl", older)]
+        if newer_first
+        else [("zhihu-10.jsonl", older), ("zhihu-20.jsonl", newer)]
+    )
+    for filename, record in records:
+        _write(raw / filename, [record])
+
+    KnowledgeIndexer(repository).build(raw)
+
+    document_id = repository.resolve_identity("zhihu:answer:123")
+    assert document_id is not None
+    assert repository.document(document_id)["plain_content"] == "newer"
+    assert repository.count_memberships(document_id) == 2
+    media = repository.connection.execute(
+        "SELECT remote_url FROM media WHERE document_id=? ORDER BY media_order", (document_id,)
+    ).fetchall()
+    assert [row[0] for row in media] == ["https://img/new"]
+
+
+def test_identical_second_build_does_not_touch_document_or_search_projection(
+    repository: KnowledgeRepository, raw_dir: Path
+) -> None:
+    indexer = KnowledgeIndexer(repository)
+    indexer.build(raw_dir)
+    document_id = repository.resolve_identity("zhihu:answer:123")
+    assert document_id is not None
+    repository.connection.execute(
+        "UPDATE documents SET updated_at='2000-01-01 00:00:00' WHERE id=?", (document_id,)
+    )
+    repository.connection.commit()
+
+    report = indexer.build(raw_dir)
+
+    assert report.updated == 0
+    assert report.search_projections_updated == 0
+    assert repository.document(document_id)["updated_at"] == "2000-01-01 00:00:00"
+
+
+def test_later_source_edit_updates_and_queues_a_new_job(
+    repository: KnowledgeRepository, raw_dir: Path
+) -> None:
+    initial = _zhihu(content="before")
+    initial["saved_at"] = "2025-01-01T00:00:00Z"
+    _write(raw_dir / "zhihu-10.jsonl", [initial])
+    indexer = KnowledgeIndexer(repository)
+    indexer.build(raw_dir)
+    edited = _zhihu(content="after")
+    edited["saved_at"] = "2025-02-01T00:00:00Z"
+    _write(raw_dir / "zhihu-10.jsonl", [edited])
+
+    report = indexer.build(raw_dir)
+
+    document_id = repository.resolve_identity("zhihu:answer:123")
+    assert document_id is not None
+    assert report.updated == 1
+    assert report.derivation_jobs_queued == 1
+    assert repository.document(document_id)["plain_content"] == "after"
+    assert repository.connection.execute(
+        "SELECT COUNT(*) FROM jobs WHERE document_id=?", (document_id,)
+    ).fetchone()[0] == 2
