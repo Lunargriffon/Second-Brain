@@ -14,4 +14,8 @@ import pytest
     ],
 )
 def test_phase_two_package_is_importable(package_name: str) -> None:
-    assert importlib.import_module(package_name)
+    package = importlib.import_module(package_name)
+
+    assert package.__doc__ == (
+        "Focused Phase 2 package; public APIs are exported explicitly by modules."
+    )
