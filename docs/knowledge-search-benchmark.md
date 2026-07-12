@@ -1,6 +1,6 @@
 # Chinese Lexical Search Benchmark
 
-Status: fixture baseline complete; real-corpus acceptance pending human labels.
+Status: accepted. Jieba pretokenization is the production lexical-search strategy.
 
 ## Method
 
@@ -37,11 +37,14 @@ Jieba is the provisional fixture winner. This is not yet sufficient evidence to
 select the production default because the deterministic fixtures do not model
 the vocabulary and relevance judgments of the private archive.
 
-## Real-corpus acceptance gate
+## Real-corpus acceptance result
 
-The ignored file `data/state/search-queries-real.json` does not yet exist. A
-human must label at least 30 real archived queries there, without committing
-private titles, queries, or document IDs. Then run:
+The ignored file `data/state/search-queries-real.json` contains 40 manually
+reviewed queries over 1,257 archived documents. It covers short Chinese terms,
+mixed Chinese/English text, title and body intents, and literal FTS syntax
+characters. Private query text, titles, and document IDs remain uncommitted.
+
+Reproduce the private benchmark locally with:
 
 ```powershell
 python tools/benchmark_search.py `
@@ -50,15 +53,25 @@ python tools/benchmark_search.py `
   --output data/state/search-benchmark-real.json
 ```
 
-The production selection remains blocked until one candidate achieves all of:
+Both candidates achieved all acceptance thresholds:
 
 - macro recall@10 at least 0.90;
 - MRR at least 0.75;
 - p95 latency below 100 ms;
 - zero unsupported and invalid acceptance queries.
 
+| Strategy | recall@10 | MRR | p95 ms | Index bytes | Unsupported | Invalid | Fallback |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| trigram + short-query fallback | 0.9250 | 0.7598 | 1.2081 | 53,719,040 | 0 | 0 | 5 |
+| Jieba pretokenization | 0.9750 | 0.7981 | 6.9514 | 25,362,432 | 0 | 0 | 0 |
+
+Jieba is selected because it has higher recall and MRR, uses less than half the
+index space, supports every accepted short query without a separate fallback,
+and remains far below the latency ceiling. The benchmark was independently
+rerun before recording these aggregate metrics.
+
 The real report stays under ignored `data/state/`; only aggregate, non-private
-metrics may be copied into this document after review.
+metrics are recorded here.
 
 ## Reproduce the fixture baseline
 
