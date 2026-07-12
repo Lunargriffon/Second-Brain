@@ -10,7 +10,7 @@ from pkb.knowledge.models import NormalizedDocument, SourceMembership
 from pkb.knowledge.urls import canonicalize_url, platform_identity
 
 
-_COLLECTION_FILE = re.compile(r"^zhihu-(.+)\.jsonl$")
+_COLLECTION_FILE = re.compile(r"^zhihu-(\d+)\.jsonl$")
 
 
 def _text(value: object) -> str:

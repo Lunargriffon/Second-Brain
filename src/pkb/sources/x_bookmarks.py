@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Mapping
 from urllib.parse import urlsplit
 
 from pkb.knowledge.models import NormalizedDocument, SourceMembership
@@ -28,6 +28,20 @@ def _first_http_link(value: object) -> str | None:
     return None
 
 
+def _string_items(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    return tuple(item for item in value if isinstance(item, str))
+
+
+def _author(record: Mapping[str, object]) -> str:
+    direct = _text(record.get("authorName"))
+    if direct:
+        return direct
+    nested = record.get("author")
+    return _text(nested.get("name")) if isinstance(nested, Mapping) else ""
+
+
 class XBookmarkAdapter:
     source_name = "x"
 
@@ -37,7 +51,7 @@ class XBookmarkAdapter:
         tweet_url = _text(record.get("url"))
         target_url = _first_http_link(record.get("links")) or tweet_url
         canonical_url = canonicalize_url(target_url)
-        source_item_id = _text(record.get("id"))
+        source_item_id = _text(record.get("id")) or _text(record.get("tweetId"))
         identity_key = platform_identity(canonical_url) or f"x:{source_item_id}"
         content = _text(record.get("text"))
 
@@ -45,9 +59,9 @@ class XBookmarkAdapter:
             identity_key=identity_key,
             canonical_url=canonical_url,
             title=content,
-            author=_text(record.get("authorName")),
+            author=_author(record),
             plain_content=content,
-            media_urls=(),
+            media_urls=_string_items(record.get("media")),
             source_created_at=_text(record.get("postedAt")) or None,
             membership=SourceMembership(
                 source=self.source_name,
