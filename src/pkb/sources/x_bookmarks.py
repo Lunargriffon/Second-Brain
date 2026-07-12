@@ -52,7 +52,10 @@ class XBookmarkAdapter:
         target_url = _first_http_link(record.get("links")) or tweet_url
         canonical_url = canonicalize_url(target_url)
         source_item_id = _text(record.get("id")) or _text(record.get("tweetId"))
-        identity_key = platform_identity(canonical_url) or f"x:{source_item_id}"
+        recognized_identity = platform_identity(canonical_url)
+        if not source_item_id and not recognized_identity:
+            raise ValueError("stable source identity is required")
+        identity_key = recognized_identity or f"x:{source_item_id}"
         content = _text(record.get("text"))
 
         return NormalizedDocument(

@@ -32,7 +32,10 @@ class ZhihuAdapter:
         source_url = _text(record.get("url"))
         canonical_url = canonicalize_url(source_url)
         source_item_id = _text(record.get("id"))
-        identity_key = platform_identity(canonical_url) or f"zhihu:{source_item_id}"
+        recognized_identity = platform_identity(canonical_url)
+        if not source_item_id and not recognized_identity:
+            raise ValueError("stable source identity is required")
+        identity_key = recognized_identity or f"zhihu:{source_item_id}"
         match = _COLLECTION_FILE.match(raw_path.name)
         collection_id = match.group(1) if match else None
 

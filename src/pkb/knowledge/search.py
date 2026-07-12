@@ -8,6 +8,7 @@ import logging
 import re
 import sqlite3
 import warnings
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -100,13 +101,38 @@ class SearchIndex:
     def _terms(cls, text: str) -> str:
         return " ".join(cls._tokens(text))
 
-    def index_document(self, document_id: int) -> None:
-        with self.connection:
+    def index_document(self, document_id: int, *, commit: bool = True) -> None:
+        with self.connection if commit else nullcontext():
             self._index_document(document_id)
+
+    def ensure_current(self, document_id: int, *, commit: bool = True) -> bool:
+        """Refresh a projection only when document or tokenizer metadata changed."""
+        row = self.connection.execute(
+            """SELECT s.normalized_content_hash AS indexed_hash,
+                      s.normalization_version AS indexed_version, s.strategy,
+                      s.tokenizer_version, s.dictionary_fingerprint,
+                      d.normalized_content_hash, d.normalization_version
+               FROM documents d LEFT JOIN documents_search_content s
+                 ON s.document_id=d.id WHERE d.id=?""",
+            (document_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"document {document_id} does not exist")
+        current = (
+            row["indexed_hash"] == row["normalized_content_hash"]
+            and row["indexed_version"] == row["normalization_version"]
+            and row["strategy"] == self.strategy
+            and row["tokenizer_version"] == self.tokenizer_version
+            and row["dictionary_fingerprint"] == self.dictionary_fingerprint
+        )
+        if not current:
+            self.index_document(document_id, commit=commit)
+        return not current
 
     def _index_document(self, document_id: int) -> None:
         document = self.connection.execute(
-            "SELECT id, title, plain_content FROM documents WHERE id=?", (document_id,)
+            """SELECT id, title, plain_content, normalized_content_hash,
+                      normalization_version FROM documents WHERE id=?""", (document_id,)
         ).fetchone()
         if document is None:
             raise KeyError(f"document {document_id} does not exist")
@@ -121,8 +147,9 @@ class SearchIndex:
                 """INSERT INTO documents_search_content
                    (document_id, title, content, summary, tags, title_terms,
                     content_terms, summary_terms, tags_terms, strategy,
-                    tokenizer_version, dictionary_fingerprint)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    tokenizer_version, dictionary_fingerprint,
+                    normalized_content_hash, normalization_version)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(document_id) DO UPDATE SET
                      title=excluded.title, content=excluded.content,
                      summary=excluded.summary, tags=excluded.tags,
@@ -131,12 +158,15 @@ class SearchIndex:
                      summary_terms=excluded.summary_terms,
                      tags_terms=excluded.tags_terms, strategy=excluded.strategy,
                      tokenizer_version=excluded.tokenizer_version,
-                     dictionary_fingerprint=excluded.dictionary_fingerprint""",
+                     dictionary_fingerprint=excluded.dictionary_fingerprint,
+                     normalized_content_hash=excluded.normalized_content_hash,
+                     normalization_version=excluded.normalization_version""",
                 (
                     document_id, title, content, summary, tags,
                     self._terms(title), self._terms(content), self._terms(summary),
                     self._terms(tags), self.strategy, self.tokenizer_version,
                     self.dictionary_fingerprint,
+                    document["normalized_content_hash"], document["normalization_version"],
                 ),
         )
 

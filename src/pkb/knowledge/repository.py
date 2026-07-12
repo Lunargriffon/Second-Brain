@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -47,9 +48,10 @@ class KnowledgeRepository:
         source_hash: str,
         normalized_hash: str,
         normalization_version: int,
+        commit: bool = True,
     ) -> UpsertResult:
         canonical_url = canonicalize_url(document.canonical_url) if document.canonical_url else ""
-        with self.connection:
+        with self.connection if commit else nullcontext():
             existing = self._find_document(document.identity_key, canonical_url, source_hash)
             created = existing is None
             if created:
@@ -365,6 +367,20 @@ class KnowledgeRepository:
 
     def count_documents(self) -> int:
         return self.connection.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+
+    def enqueue_derivation_job(
+        self, document_id: int, *, input_hash: str, pipeline_version: str,
+        commit: bool = True,
+    ) -> bool:
+        """Queue one pending article job, returning whether it was newly created."""
+        with self.connection if commit else nullcontext():
+            cursor = self.connection.execute(
+                """INSERT OR IGNORE INTO jobs
+                   (job_type, document_id, input_hash, pipeline_version, status)
+                   VALUES ('article', ?, ?, ?, 'pending')""",
+                (document_id, input_hash, pipeline_version),
+            )
+        return cursor.rowcount == 1
 
     def document(self, document_id: int) -> sqlite3.Row | None:
         return self.connection.execute("SELECT * FROM documents WHERE id=?", (document_id,)).fetchone()

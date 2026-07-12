@@ -7,7 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 _MIGRATION_1 = (
@@ -240,7 +240,12 @@ _MIGRATION_2 = (
     END""",
 )
 
-_MIGRATIONS = {1: _MIGRATION_1, 2: _MIGRATION_2}
+_MIGRATION_3 = (
+    "ALTER TABLE documents_search_content ADD COLUMN normalized_content_hash TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE documents_search_content ADD COLUMN normalization_version INTEGER NOT NULL DEFAULT 0",
+)
+
+_MIGRATIONS = {1: _MIGRATION_1, 2: _MIGRATION_2, 3: _MIGRATION_3}
 
 
 def migrate(connection: sqlite3.Connection) -> None:
