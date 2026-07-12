@@ -193,3 +193,57 @@ def test_old_identity_upsert_resolves_to_merge_survivor(repository):
     result = repository.upsert_document(old_doc, source_hash="s2", normalized_hash="n2", normalization_version=1)
     assert result.document_id == survivor
     assert repository.count_documents() == 1
+
+
+def test_upsert_rejects_disagreeing_identity_and_url_candidates_transactionally(repository):
+    identity_doc = repository.upsert_document(document(), source_hash="s1", normalized_hash="n1", normalization_version=1)
+    url_doc = repository.upsert_document(document(identity="x:url-owner", source="x", item="url-owner", url="https://x.com/url-owner"), source_hash="s2", normalized_hash="n2", normalization_version=1)
+    aliases_before = repository.connection.execute("SELECT COUNT(*) FROM document_url_aliases").fetchone()[0]
+    memberships_before = repository.connection.execute("SELECT COUNT(*) FROM source_memberships").fetchone()[0]
+    conflicting = document(identity="zhihu:answer:1", source="x", item="conflict", url="https://x.com/url-owner")
+
+    with pytest.raises(MergeConflictError, match="identity candidates"):
+        repository.upsert_document(conflicting, source_hash="s3", normalized_hash="n3", normalization_version=1)
+
+    assert repository.count_documents() == 2
+    assert repository.connection.execute("SELECT COUNT(*) FROM document_url_aliases").fetchone()[0] == aliases_before
+    assert repository.connection.execute("SELECT COUNT(*) FROM source_memberships").fetchone()[0] == memberships_before
+    assert repository.document(identity_doc.document_id)["source_content_hash"] == "s1"
+    assert repository.document(url_doc.document_id)["source_content_hash"] == "s2"
+
+
+def test_empty_urls_do_not_create_a_global_slash_alias(repository):
+    one = repository.upsert_document(document(identity="local:1", url=""), source_hash="s1", normalized_hash="n1", normalization_version=1)
+    two = repository.upsert_document(document(identity="local:2", item="2", url=""), source_hash="s2", normalized_hash="n2", normalization_version=1)
+
+    assert one.document_id != two.document_id
+    assert repository.count_documents() == 2
+    assert repository.connection.execute("SELECT COUNT(*) FROM document_url_aliases").fetchone()[0] == 0
+
+
+def test_identical_reading_state_keeps_nonempty_note_over_newer_review(repository):
+    survivor = repository.upsert_document(document(), source_hash="s1", normalized_hash="n1", normalization_version=1).document_id
+    duplicate = repository.upsert_document(document(identity="x:note", source="x", item="note", url="https://x.com/note"), source_hash="s2", normalized_hash="n2", normalization_version=1).document_id
+    repository.set_reading_state(survivor, status="read", user_note_ref="note.md", last_reviewed_at="2024-01-01")
+    repository.set_reading_state(duplicate, status="read", last_reviewed_at="2024-02-01")
+
+    repository.merge_documents(survivor, duplicate, reason="same")
+
+    state = repository.reading_state(survivor)
+    assert state["user_note_ref"] == "note.md"
+    assert state["last_reviewed_at"] == "2024-02-01"
+
+
+def test_merge_rejects_url_alias_metadata_conflict(repository):
+    survivor = repository.upsert_document(document(), source_hash="s1", normalized_hash="n1", normalization_version=1).document_id
+    duplicate = repository.upsert_document(document(identity="x:alias", source="x", item="alias", url="https://x.com/alias"), source_hash="s2", normalized_hash="n2", normalization_version=1).document_id
+    db = repository.connection
+    survivor_url = db.execute("SELECT canonical_url FROM documents WHERE id=?", (survivor,)).fetchone()[0]
+    db.execute("DELETE FROM document_url_aliases WHERE document_id=?", (survivor,))
+    db.execute("UPDATE document_url_aliases SET url=?, observed_url=?, source='x' WHERE document_id=?", (survivor_url, survivor_url + "?source=x", duplicate))
+    db.commit()
+
+    with pytest.raises(MergeConflictError, match="URL alias"):
+        repository.merge_documents(survivor, duplicate, reason="same")
+    assert repository.count_documents() == 2
+    assert repository.count_merges() == 0

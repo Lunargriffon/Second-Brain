@@ -48,7 +48,7 @@ class KnowledgeRepository:
         normalized_hash: str,
         normalization_version: int,
     ) -> UpsertResult:
-        canonical_url = canonicalize_url(document.canonical_url)
+        canonical_url = canonicalize_url(document.canonical_url) if document.canonical_url else ""
         with self.connection:
             existing = self._find_document(document.identity_key, canonical_url, source_hash)
             created = existing is None
@@ -102,11 +102,12 @@ class KnowledgeRepository:
                     ),
                     )
 
-            self.connection.execute(
-                """INSERT INTO document_url_aliases(document_id, url, observed_url, source)
-                   VALUES (?, ?, ?, ?) ON CONFLICT(url) DO NOTHING""",
-                (document_id, canonical_url, document.canonical_url, document.membership.source),
-            )
+            if canonical_url:
+                self.connection.execute(
+                    """INSERT INTO document_url_aliases(document_id, url, observed_url, source)
+                       VALUES (?, ?, ?, ?) ON CONFLICT(url) DO NOTHING""",
+                    (document_id, canonical_url, document.canonical_url, document.membership.source),
+                )
             membership = document.membership
             membership_owner = self.connection.execute(
                 """SELECT document_id FROM source_memberships
@@ -143,34 +144,35 @@ class KnowledgeRepository:
         return UpsertResult(document_id, created, normalized_changed, source_changed)
 
     def _find_document(self, identity_key: str, canonical_url: str, source_hash: str) -> sqlite3.Row | None:
-        row = self.connection.execute("SELECT * FROM documents WHERE identity_key=?", (identity_key,)).fetchone()
-        if row is not None:
-            return row
-        row = self.connection.execute(
-            """SELECT d.* FROM documents d JOIN document_identity_aliases a
-               ON a.canonical_document_id=d.id WHERE a.alias_identity_key=?""",
-            (identity_key,),
-        ).fetchone()
-        if row is not None:
-            return row
-        recognized = platform_identity(canonical_url)
-        if recognized:
-            row = self.connection.execute("SELECT * FROM documents WHERE identity_key=?", (recognized,)).fetchone()
-            if row is not None:
-                return row
-        row = self.connection.execute(
-            """SELECT d.* FROM documents d JOIN document_url_aliases a ON a.document_id=d.id
-               WHERE a.url=?""",
-            (canonical_url,),
-        ).fetchone()
-        if row is not None:
-            return row
-        if identity_key.startswith("url:"):
-            return self.connection.execute(
-                "SELECT * FROM documents WHERE identity_key LIKE 'url:%' AND source_content_hash=?",
-                (source_hash,),
+        candidate_ids: set[int] = set()
+        identities = {identity_key}
+        if canonical_url and (recognized := platform_identity(canonical_url)):
+            identities.add(recognized)
+        for candidate_identity in identities:
+            rows = self.connection.execute(
+                """SELECT id FROM documents WHERE identity_key=?
+                   UNION SELECT canonical_document_id FROM document_identity_aliases
+                   WHERE alias_identity_key=?""",
+                (candidate_identity, candidate_identity),
+            ).fetchall()
+            candidate_ids.update(int(row[0]) for row in rows)
+        if canonical_url:
+            row = self.connection.execute(
+                "SELECT document_id FROM document_url_aliases WHERE url=?", (canonical_url,)
             ).fetchone()
-        return None
+            if row:
+                candidate_ids.add(int(row[0]))
+        if not candidate_ids and identity_key.startswith("url:"):
+            rows = self.connection.execute(
+                "SELECT id FROM documents WHERE identity_key LIKE 'url:%' AND source_content_hash=?",
+                (source_hash,),
+            ).fetchall()
+            candidate_ids.update(int(row[0]) for row in rows)
+        if len(candidate_ids) > 1:
+            raise MergeConflictError("identity candidates disagree")
+        if not candidate_ids:
+            return None
+        return self.connection.execute("SELECT * FROM documents WHERE id=?", (candidate_ids.pop(),)).fetchone()
 
     @staticmethod
     def _source_rank(source: str | None) -> int:
@@ -272,6 +274,17 @@ class KnowledgeRepository:
             raise MergeConflictError("documents have derived or queued child records")
         self._reject_evidence_conflicts("source_memberships", survivor, duplicate, ("source", "source_item_id", "collection_id"))
         self._reject_evidence_conflicts("media", survivor, duplicate, ("remote_url",))
+        survivor_document = self.document(survivor)
+        if survivor_document and survivor_document["canonical_url"]:
+            alias = self.connection.execute(
+                "SELECT * FROM document_url_aliases WHERE document_id=? AND url=?",
+                (duplicate, survivor_document["canonical_url"]),
+            ).fetchone()
+            if alias and (
+                alias["observed_url"] != survivor_document["canonical_url"]
+                or alias["source"] != survivor_document["source_type"]
+            ):
+                raise MergeConflictError("conflicting URL alias evidence")
 
     def _reject_evidence_conflicts(self, table: str, survivor: int, duplicate: int, keys: tuple[str, ...]) -> None:
         duplicate_rows = self.connection.execute(f"SELECT * FROM {table} WHERE document_id=?", (duplicate,)).fetchall()
@@ -311,21 +324,24 @@ class KnowledgeRepository:
         if left and right and left["user_note_ref"] and right["user_note_ref"] and left["user_note_ref"] != right["user_note_ref"]:
             raise MergeConflictError("conflicting human notes")
 
-    def _choose_state(self, left: sqlite3.Row | None, right: sqlite3.Row | None, policy: str) -> sqlite3.Row | None:
+    def _choose_state(self, left: sqlite3.Row | None, right: sqlite3.Row | None, policy: str) -> sqlite3.Row | dict[str, Any] | None:
         if not self._explicit(left):
             return right or left
         if not self._explicit(right):
             return left
         comparable = ("status", "manual_priority", "priority_reason")
         if all(left[key] == right[key] for key in comparable):
-            return max((left, right), key=lambda row: row["last_reviewed_at"] or "")
+            newer = max((left, right), key=lambda row: row["last_reviewed_at"] or "")
+            combined = dict(newer)
+            combined["user_note_ref"] = left["user_note_ref"] or right["user_note_ref"]
+            return combined
         if policy == "reject":
             raise MergeConflictError("conflicting reading state")
         if policy == "survivor":
             return left
         return max((left, right), key=lambda row: row["last_reviewed_at"] or "")
 
-    def _insert_state(self, document_id: int, state: sqlite3.Row) -> None:
+    def _insert_state(self, document_id: int, state: sqlite3.Row | dict[str, Any]) -> None:
         self.connection.execute(
             """INSERT INTO reading_state(document_id, status, manual_priority, priority_reason,
                last_reviewed_at, user_note_ref, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)""",
