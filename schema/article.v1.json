@@ -1,0 +1,108 @@
+{
+  "$id": "https://pkb.local/schema/article.v1.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PKB Article Schema v1",
+  "description": "Schema definition for a single article record in the Personal Knowledge Base.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "id",
+    "source",
+    "title",
+    "url",
+    "author",
+    "content",
+    "created_at",
+    "saved_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0",
+      "description": "Schema version of this record."
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z]+_[a-zA-Z0-9._-]+$",
+      "description": "Globally unique identifier. Format: {source}_{platform_id}"
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "zhihu",
+        "github",
+        "arxiv",
+        "pdf",
+        "web",
+        "youtube",
+        "bilibili",
+        "rss",
+        "note"
+      ],
+      "description": "Original data source."
+    },
+    "title": {
+      "type": "string",
+      "description": "Article title."
+    },
+    "url": {
+      "type": "string",
+      "format": "uri",
+      "description": "Original URL of the article."
+    },
+    "author": {
+      "type": "string",
+      "description": "Original author."
+    },
+    "content": {
+      "type": "string",
+      "description": "Extracted plain text content."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Original publication time in ISO 8601 format."
+    },
+    "saved_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Time when the article was saved into the knowledge base, in ISO 8601 format."
+    },
+    "source_collection_id": {
+      "type": "string",
+      "description": "Zhihu collection ID this record was exported from."
+    },
+    "source_collection_title": {
+      "type": "string",
+      "description": "Zhihu collection title this record was exported from, when known."
+    },
+    "images": {
+      "type": "array",
+      "description": "List of downloaded image paths or original image URLs.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "raw_html": {
+      "type": "string",
+      "description": "Optional raw HTML. Disabled by default. Store only when content extraction fails, HTML structure is explicitly requested, or debugging is required."
+    }
+  },
+  "additionalProperties": false,
+  "examples": [
+    {
+      "schema_version": "1.0",
+      "id": "zhihu_123456789",
+      "source": "zhihu",
+      "title": "Why Modern GPUs Are So Powerful",
+      "url": "https://www.zhihu.com/question/123456789/answer/987654321",
+      "author": "Example Author",
+      "content": "GPU performance mainly comes from massive parallelism...",
+      "created_at": "2024-01-15T08:30:00Z",
+      "saved_at": "2026-06-30T12:00:00Z",
+      "images": [
+        "images/gpu_architecture.png"
+      ]
+    }
+  ]
+}

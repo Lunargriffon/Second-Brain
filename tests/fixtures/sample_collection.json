@@ -1,0 +1,22 @@
+{
+  "items": [
+    {
+      "id": "123456",
+      "title": "A useful answer",
+      "url": "https://www.zhihu.com/question/123/answer/456",
+      "author": "Example Author",
+      "content": "Useful content.",
+      "created_at": "2024-01-15T08:30:00Z",
+      "images": []
+    },
+    {
+      "id": "789012",
+      "title": "Another useful answer",
+      "url": "https://www.zhihu.com/question/789/answer/012",
+      "author": "Second Author",
+      "content": "More useful content.",
+      "created_at": "2024-02-20T10:00:00Z",
+      "images": []
+    }
+  ]
+}
