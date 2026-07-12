@@ -60,27 +60,24 @@ def _hash(value: Any) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def _first(record: Mapping[str, object], *keys: str) -> object | None:
-    for key in keys:
-        if key in record:
-            return record[key]
-    return None
-
-
 def source_content_hash(record: Mapping[str, object]) -> str:
     """Hash stable knowledge fields while excluding acquisition metadata."""
 
     knowledge = {
         "id": record.get("id"),
         "title": record.get("title"),
-        "author": _first(record, "author", "authorName"),
-        "content": _first(record, "content", "text"),
+        "author": record.get("author"),
+        "authorName": record.get("authorName"),
+        "content": record.get("content"),
+        "text": record.get("text"),
         "url": record.get("url"),
         "links": record.get("links"),
         "images": record.get("images"),
-        "source_created_at": _first(
-            record, "source_created_at", "created_at", "createdAt", "created_time"
-        ),
+        "media": record.get("media"),
+        "source_created_at": record.get("source_created_at"),
+        "created_at": record.get("created_at"),
+        "createdAt": record.get("createdAt"),
+        "created_time": record.get("created_time"),
     }
     return _hash(knowledge)
 

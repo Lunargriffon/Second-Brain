@@ -35,6 +35,47 @@ def test_media_order_remains_meaningful():
     )
 
 
+def test_x_media_order_and_url_changes_affect_source_hash():
+    record = {
+        "media": [
+            {"type": "photo", "url": "https://img.example/one.jpg"},
+            {"type": "photo", "url": "https://img.example/two.jpg"},
+        ]
+    }
+
+    assert source_content_hash(record) != source_content_hash(
+        {**record, "media": list(reversed(record["media"]))}
+    )
+    assert source_content_hash(record) != source_content_hash(
+        {
+            **record,
+            "media": [
+                record["media"][0],
+                {"type": "photo", "url": "https://img.example/changed.jpg"},
+            ],
+        }
+    )
+
+
+def test_flat_author_change_is_detected_when_nested_author_also_exists():
+    record = {"author": {"id": "42", "name": "Nested"}, "authorName": "Flat"}
+
+    assert source_content_hash(record) != source_content_hash(
+        {**record, "authorName": "Changed"}
+    )
+
+
+def test_each_coexisting_content_field_affects_source_hash():
+    record = {"content": "Rendered body", "text": "Plain body"}
+
+    assert source_content_hash(record) != source_content_hash(
+        {**record, "content": "Changed rendered body"}
+    )
+    assert source_content_hash(record) != source_content_hash(
+        {**record, "text": "Changed plain body"}
+    )
+
+
 def test_non_json_values_are_normalized_deterministically():
     first = {
         "links": {
