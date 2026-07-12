@@ -1,0 +1,67 @@
+# Chinese Lexical Search Benchmark
+
+Status: fixture baseline complete; real-corpus acceptance pending human labels.
+
+## Method
+
+Both candidates index the same normalized corpus and execute the same 30-query
+acceptance set. Results are deduplicated by document identity before macro
+recall@10 and MRR are calculated. Queries without a relevant-document label are
+invalid and excluded from quality metrics. Latency uses one untimed warm-up and
+three timed executions per query; p95 is the nearest-rank percentile.
+
+The candidates are:
+
+- SQLite FTS5 `trigram`, with a parameterized `LIKE` substring fallback for
+  normalized queries shorter than three characters. This is not described as
+  pure trigram; fallback use is reported separately.
+- Jieba search-mode pretokenization stored in an FTS5 `unicode61` index.
+
+## Deterministic fixture result
+
+Run on SQLite 3.49.1 against 12 non-private fixture documents and 30 labeled
+queries. Corpus SHA-256:
+`e42a164aa03a8a8f9ec7c265b17db20902997e58a444dacaf2992738ab936a82`.
+
+| Strategy | recall@10 | MRR | p95 ms | Index bytes | Unsupported | Fallback |
+|---|---:|---:|---:|---:|---:|---:|
+| trigram + short-query fallback | 0.9000 | 0.8833 | 0.0557 | 36,864 | 0 | 5 |
+| Jieba pretokenization | 0.9667 | 0.9500 | 0.0656 | 24,576 | 0 | 0 |
+
+Jieba is the provisional fixture winner. This is not yet sufficient evidence to
+select the production default because the deterministic fixtures do not model
+the vocabulary and relevance judgments of the private archive.
+
+## Real-corpus acceptance gate
+
+The ignored file `data/state/search-queries-real.json` does not yet exist. A
+human must label at least 30 real archived queries there, without committing
+private titles, queries, or document IDs. Then run:
+
+```powershell
+python tools/benchmark_search.py `
+  --raw-dir data/raw `
+  --queries data/state/search-queries-real.json `
+  --output data/state/search-benchmark-real.json
+```
+
+The production selection remains blocked until one candidate achieves all of:
+
+- macro recall@10 at least 0.90;
+- MRR at least 0.75;
+- p95 latency below 100 ms;
+- zero unsupported and invalid acceptance queries.
+
+The real report stays under ignored `data/state/`; only aggregate, non-private
+metrics may be copied into this document after review.
+
+## Reproduce the fixture baseline
+
+```powershell
+python -m pip install -e ".[search]"
+python -m pytest tests/test_search_benchmark.py -v
+python tools/benchmark_search.py `
+  --raw-dir tests/fixtures/knowledge `
+  --queries tests/fixtures/search_queries.json `
+  --output data/state/search-benchmark-fixture.json
+```

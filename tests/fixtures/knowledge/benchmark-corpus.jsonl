@@ -1,0 +1,10 @@
+{"identity":"fixture:1","title":"学习方法与理解","content":"先理解原理，再进行刻意练习，最后复盘反馈。"}
+{"identity":"fixture:2","title":"知识管理工作流","content":"个人知识库需要可靠采集、双向链接和渐进式整理。"}
+{"identity":"fixture:3","title":"Python 数据分析","content":"使用 Python 和 SQLite 构建轻量数据管道。"}
+{"identity":"fixture:4","title":"人工智能辅助写作","content":"AI 可以帮助提炼观点，但人工审核不可缺少。"}
+{"identity":"fixture:5","title":"长期投资原则","content":"关注现金流、安全边际和风险控制，而非短期价格。"}
+{"identity":"fixture:6","title":"睡眠与健康","content":"规律作息、适量运动和深度睡眠有助于恢复精力。"}
+{"identity":"fixture:7","title":"产品设计入门","content":"从用户问题出发，通过原型测试持续迭代体验。"}
+{"identity":"fixture:8","title":"阅读与思考","content":"主动阅读需要提出问题、记录证据并形成自己的判断。"}
+{"identity":"fixture:9","title":"远程协作实践","content":"异步沟通、清晰文档和明确责任能够减少会议。"}
+{"identity":"fixture:10","title":"数据库索引基础","content":"全文检索可以使用 FTS5，中文搜索需要合理分词。"}
