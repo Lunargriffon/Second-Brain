@@ -12,7 +12,7 @@ SCHEMA_VERSION = 1
 
 _MIGRATION_1 = (
     """CREATE TABLE IF NOT EXISTS documents (
-        id INTEGER PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
         identity_key TEXT NOT NULL UNIQUE,
         source_type TEXT,
         title TEXT,
@@ -52,6 +52,12 @@ _MIGRATION_1 = (
     )""",
     """CREATE TABLE IF NOT EXISTS document_id_aliases (
         alias_document_id INTEGER PRIMARY KEY,
+        canonical_document_id INTEGER NOT NULL REFERENCES documents(id),
+        merge_id INTEGER REFERENCES document_merges(id),
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )""",
+    """CREATE TABLE IF NOT EXISTS document_identity_aliases (
+        alias_identity_key TEXT PRIMARY KEY,
         canonical_document_id INTEGER NOT NULL REFERENCES documents(id),
         merge_id INTEGER REFERENCES document_merges(id),
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -178,6 +184,8 @@ _MIGRATION_1 = (
     "CREATE INDEX IF NOT EXISTS idx_url_aliases_document ON document_url_aliases(document_id)",
     "CREATE INDEX IF NOT EXISTS idx_id_aliases_canonical ON document_id_aliases(canonical_document_id)",
     "CREATE INDEX IF NOT EXISTS idx_id_aliases_merge ON document_id_aliases(merge_id)",
+    "CREATE INDEX IF NOT EXISTS idx_identity_aliases_canonical ON document_identity_aliases(canonical_document_id)",
+    "CREATE INDEX IF NOT EXISTS idx_identity_aliases_merge ON document_identity_aliases(merge_id)",
     "CREATE INDEX IF NOT EXISTS idx_media_document ON media(document_id, media_order)",
     "CREATE INDEX IF NOT EXISTS idx_derivations_document_kind ON derivations(document_id, kind, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_derivations_supersedes ON derivations(supersedes_derivation_id)",

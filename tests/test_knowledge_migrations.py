@@ -10,6 +10,7 @@ CORE_TABLES = {
     "source_memberships",
     "document_url_aliases",
     "document_id_aliases",
+    "document_identity_aliases",
     "media",
     "derivations",
     "tags",
@@ -78,6 +79,7 @@ def test_document_schema_matches_repository_contract(tmp_path):
         "reading_state": "document_id",
         "jobs": "document_id",
         "document_id_aliases": "canonical_document_id",
+        "document_identity_aliases": "canonical_document_id",
         "document_merges": "survivor_document_id",
     }
     for table, column in document_reference_columns.items():
@@ -107,6 +109,51 @@ def test_document_id_alias_records_the_merge_that_created_it(tmp_path):
         (row[3], row[2], row[4])
         for row in connection.execute("PRAGMA foreign_key_list(document_id_aliases)")
     }
+    assert ("merge_id", "document_merges", "id") in foreign_keys
+
+
+def test_document_ids_are_not_reused_after_deletion(tmp_path):
+    connection = sqlite3.connect(tmp_path / "knowledge.db")
+    migrate(connection)
+    for identity in ("identity-1", "identity-2"):
+        connection.execute(
+            """INSERT INTO documents
+               (identity_key, source_content_hash, normalized_content_hash,
+                normalization_version, schema_version)
+               VALUES (?, 'source-hash', 'normalized-hash', 1, 1)""",
+            (identity,),
+        )
+    assert connection.execute("SELECT max(id) FROM documents").fetchone()[0] == 2
+
+    connection.execute("DELETE FROM documents WHERE id = 2")
+    cursor = connection.execute(
+        """INSERT INTO documents
+           (identity_key, source_content_hash, normalized_content_hash,
+            normalization_version, schema_version)
+           VALUES ('identity-3', 'source-hash', 'normalized-hash', 1, 1)"""
+    )
+
+    assert cursor.lastrowid == 3
+
+
+def test_document_identity_alias_references_document_and_merge(tmp_path):
+    connection = sqlite3.connect(tmp_path / "knowledge.db")
+    migrate(connection)
+
+    columns = {
+        row[1]: row[2]
+        for row in connection.execute("PRAGMA table_info(document_identity_aliases)")
+    }
+    assert columns["alias_identity_key"] == "TEXT"
+    assert columns["canonical_document_id"] == "INTEGER"
+    assert columns["merge_id"] == "INTEGER"
+    foreign_keys = {
+        (row[3], row[2], row[4])
+        for row in connection.execute(
+            "PRAGMA foreign_key_list(document_identity_aliases)"
+        )
+    }
+    assert ("canonical_document_id", "documents", "id") in foreign_keys
     assert ("merge_id", "document_merges", "id") in foreign_keys
 
 
