@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from dataclasses import asdict
 from pathlib import Path
 from typing import Sequence
 
@@ -74,6 +75,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "images" and args.source == "zhihu-index":
         return _run_zhihu_image_index(args)
 
+    if args.command == "index":
+        return _run_knowledge_index(args)
+
+    if args.command == "search":
+        return _run_knowledge_search(args)
+
     parser.error("unsupported command")
     return 2
 
@@ -90,6 +97,7 @@ def _build_parser() -> argparse.ArgumentParser:
     verify_subparsers = verify_parser.add_subparsers(dest="source", required=True)
     images_parser = subparsers.add_parser("images")
     images_subparsers = images_parser.add_subparsers(dest="source", required=True)
+    _add_knowledge_parsers(subparsers)
 
     zhihu_parser = export_subparsers.add_parser("zhihu")
     zhihu_parser.add_argument("--collection-url", required=True)
@@ -158,6 +166,30 @@ def _build_parser() -> argparse.ArgumentParser:
     images_index_parser.add_argument("--report", default="data/state/zhihu-image-triage.json")
     images_index_parser.add_argument("--output", default="data/state/zhihu-image-article-index.json")
     return parser
+
+
+def _add_knowledge_parsers(subparsers: argparse._SubParsersAction) -> None:
+    index_parser = subparsers.add_parser("index")
+    index_subparsers = index_parser.add_subparsers(dest="index_command", required=True)
+    for command in ("build", "rebuild"):
+        command_parser = index_subparsers.add_parser(command)
+        command_parser.add_argument("--raw-dir", required=True)
+        command_parser.add_argument("--db", required=True)
+        command_parser.add_argument("--report")
+        if command == "build":
+            command_parser.add_argument("--strict", action="store_true")
+
+    status_parser = index_subparsers.add_parser("status")
+    status_parser.add_argument("--db", required=True)
+    status_parser.add_argument("--format", choices=("text", "json"), default="text")
+
+    search_parser = subparsers.add_parser("search")
+    search_parser.add_argument("query")
+    search_parser.add_argument("--db", required=True)
+    search_parser.add_argument("--source")
+    search_parser.add_argument("--collection")
+    search_parser.add_argument("--limit", type=int, default=10)
+    search_parser.add_argument("--format", choices=("text", "json"), default="text")
 
 
 def _build_zhihu_client(args: argparse.Namespace) -> FakeZhihuClient | RealZhihuClient:
@@ -382,6 +414,59 @@ def _run_zhihu_image_index(args: argparse.Namespace) -> int:
         f"images={index['summary']['images']} "
         f"missing={index['summary']['missing_candidates']} output={args.output}"
     )
+    return 0
+
+
+def _run_knowledge_index(args: argparse.Namespace) -> int:
+    from pkb.knowledge.indexer import IndexBuildError, KnowledgeIndexer
+    from pkb.knowledge.repository import KnowledgeRepository
+    from pkb.knowledge.search import SearchIndex
+
+    with KnowledgeRepository(Path(args.db)) as repository:
+        if args.index_command == "status":
+            status = {"documents": repository.count_documents()}
+            if args.format == "json":
+                print(json.dumps(status, ensure_ascii=False, sort_keys=True))
+            else:
+                print(f"documents={status['documents']}")
+            return 0
+
+        try:
+            report = KnowledgeIndexer(repository).build(
+                Path(args.raw_dir), strict=getattr(args, "strict", False)
+            )
+        except IndexBuildError as exc:
+            print(f"Index build stopped: {exc}")
+            return 1
+        if args.index_command == "rebuild":
+            SearchIndex(repository).rebuild()
+        if args.report:
+            report.write(Path(args.report))
+        print(json.dumps(report.to_dict(), ensure_ascii=False, sort_keys=True))
+        return 0
+
+
+def _run_knowledge_search(args: argparse.Namespace) -> int:
+    from pkb.knowledge.search import SearchIndex
+
+    index = SearchIndex(Path(args.db))
+    try:
+        results = index.search(
+            args.query,
+            source=args.source,
+            collection_id=args.collection,
+            limit=args.limit,
+        )
+    except ValueError as exc:
+        print(f"Search stopped: {exc}")
+        return 1
+    finally:
+        index.close()
+    if args.format == "json":
+        print(json.dumps([asdict(result) for result in results], ensure_ascii=False))
+    else:
+        for result in results:
+            print(f"{result.document_id}\t{result.title}\t{result.url}\n{result.snippet}")
     return 0
 
 
