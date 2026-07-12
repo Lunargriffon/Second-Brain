@@ -4,10 +4,16 @@ import sqlite3
 import pytest
 
 from tools.benchmark_search import (
+    _fts_phrase,
     benchmark,
     evaluate,
     sqlite_supports_trigram,
 )
+
+
+def test_fts_phrase_quotes_user_syntax_and_escapes_quotes():
+    assert _fts_phrase("C++/CLI") == '"C++/CLI"'
+    assert _fts_phrase('他说"测试"') == '"他说""测试"""'
 
 
 def test_evaluate_calculates_macro_metrics_and_nearest_rank_p95():
@@ -71,7 +77,7 @@ def test_fixture_benchmark_compares_same_corpus_and_writes_json(tmp_path):
     )
 
     assert result["corpus"]["document_count"] >= 10
-    assert result["corpus"]["query_count"] == 30
+    assert result["corpus"]["query_count"] == 33
     assert result["sqlite"]["version"] == sqlite3.sqlite_version
     assert set(result["strategies"]) == {"trigram", "jieba"}
     assert result["strategies"]["jieba"]["unsupported_query_count"] == 0

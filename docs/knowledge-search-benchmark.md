@@ -19,14 +19,19 @@ The candidates are:
 
 ## Deterministic fixture result
 
-Run on SQLite 3.49.1 against 12 non-private fixture documents and 30 labeled
+Run on SQLite 3.49.1 against 13 non-private fixture documents and 33 labeled
 queries. Corpus SHA-256:
-`e42a164aa03a8a8f9ec7c265b17db20902997e58a444dacaf2992738ab936a82`.
+`36c9994c4be288f0940e75c3f4a0675fdbffa2335c11b71a8cc04b69f5d13eb3`.
 
 | Strategy | recall@10 | MRR | p95 ms | Index bytes | Unsupported | Fallback |
 |---|---:|---:|---:|---:|---:|---:|
-| trigram + short-query fallback | 0.9000 | 0.8833 | 0.0557 | 36,864 | 0 | 5 |
-| Jieba pretokenization | 0.9667 | 0.9500 | 0.0656 | 24,576 | 0 | 0 |
+| trigram + short-query fallback | 0.8788 | 0.8636 | 0.0629 | 36,864 | 0 | 5 |
+| Jieba pretokenization | 0.9697 | 0.9545 | 0.0501 | 24,576 | 0 | 0 |
+
+The acceptance set includes literal FTS syntax characters such as `C++`, `/`,
+and `-`. Both candidates encode all user input as an FTS5 phrase; quotes inside
+the value are doubled before parameter binding, so user text is never evaluated
+as MATCH syntax.
 
 Jieba is the provisional fixture winner. This is not yet sufficient evidence to
 select the production default because the deterministic fixtures do not model

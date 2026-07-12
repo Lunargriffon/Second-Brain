@@ -99,6 +99,11 @@ def _jieba_tokens(text: str) -> str:
     return " ".join(token.strip() for token in jieba.cut_for_search(text) if token.strip())
 
 
+def _fts_phrase(value: str) -> str:
+    """Encode user text as one FTS5 phrase, never as MATCH syntax."""
+    return f'"{value.replace(chr(34), chr(34) * 2)}"'
+
+
 def _run_strategy(
     strategy: str,
     documents: list[tuple[str, str, str]],
@@ -122,14 +127,14 @@ def _run_strategy(
         for item in queries:
             query = item["query"]
             use_fallback = strategy == "trigram" and len(query.replace(" ", "")) < 3
-            expression = query
+            expression = _fts_phrase(query)
             if strategy == "jieba":
                 tokens = _jieba_tokens(query).split()
                 if not tokens:
                     unsupported.append(query)
                     actual[query] = []
                     continue
-                expression = " OR ".join(f'"{token.replace(chr(34), chr(34) * 2)}"' for token in tokens)
+                expression = " OR ".join(_fts_phrase(token) for token in tokens)
             # One untimed warm-up reduces first-query connection/page-cache noise.
             if use_fallback:
                 escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")

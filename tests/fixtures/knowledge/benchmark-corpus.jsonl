@@ -8,3 +8,4 @@
 {"identity":"fixture:8","title":"阅读与思考","content":"主动阅读需要提出问题、记录证据并形成自己的判断。"}
 {"identity":"fixture:9","title":"远程协作实践","content":"异步沟通、清晰文档和明确责任能够减少会议。"}
 {"identity":"fixture:10","title":"数据库索引基础","content":"全文检索可以使用 FTS5，中文搜索需要合理分词。"}
+{"identity":"fixture:11","title":"C++ 工具链","content":"使用 C++/CLI 构建跨语言工具，并记录（编译-选项）与“安全查询”。"}

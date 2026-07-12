@@ -28,5 +28,8 @@
   {"query":"原型测试","expected_ids":["fixture:7"]},
   {"query":"记录证据","expected_ids":["fixture:8"]},
   {"query":"异步沟通","expected_ids":["fixture:9"]},
-  {"query":"合理分词","expected_ids":["fixture:10"]}
+  {"query":"合理分词","expected_ids":["fixture:10"]},
+  {"query":"C++","expected_ids":["fixture:11"]},
+  {"query":"C++/CLI","expected_ids":["fixture:11"]},
+  {"query":"编译-选项","expected_ids":["fixture:11"]}
 ]
