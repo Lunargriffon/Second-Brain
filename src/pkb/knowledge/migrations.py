@@ -7,7 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 _MIGRATION_1 = (
@@ -204,6 +204,44 @@ _MIGRATION_1 = (
     "CREATE INDEX IF NOT EXISTS idx_merges_survivor ON document_merges(survivor_document_id)",
 )
 
+_MIGRATION_2 = (
+    """CREATE TABLE documents_search_content (
+        document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+        title TEXT NOT NULL DEFAULT '',
+        content TEXT NOT NULL DEFAULT '',
+        summary TEXT NOT NULL DEFAULT '',
+        tags TEXT NOT NULL DEFAULT '',
+        title_terms TEXT NOT NULL DEFAULT '',
+        content_terms TEXT NOT NULL DEFAULT '',
+        summary_terms TEXT NOT NULL DEFAULT '',
+        tags_terms TEXT NOT NULL DEFAULT '',
+        strategy TEXT NOT NULL,
+        tokenizer_version TEXT NOT NULL,
+        dictionary_fingerprint TEXT NOT NULL
+    )""",
+    """CREATE VIRTUAL TABLE documents_fts USING fts5(
+        title_terms, content_terms, summary_terms, tags_terms,
+        content='documents_search_content', content_rowid='document_id'
+    )""",
+    "CREATE INDEX idx_search_content_document ON documents_search_content(document_id)",
+    """CREATE TRIGGER documents_search_content_ai AFTER INSERT ON documents_search_content BEGIN
+        INSERT INTO documents_fts(rowid, title_terms, content_terms, summary_terms, tags_terms)
+        VALUES (new.document_id, new.title_terms, new.content_terms, new.summary_terms, new.tags_terms);
+    END""",
+    """CREATE TRIGGER documents_search_content_ad AFTER DELETE ON documents_search_content BEGIN
+        INSERT INTO documents_fts(documents_fts, rowid, title_terms, content_terms, summary_terms, tags_terms)
+        VALUES ('delete', old.document_id, old.title_terms, old.content_terms, old.summary_terms, old.tags_terms);
+    END""",
+    """CREATE TRIGGER documents_search_content_au AFTER UPDATE ON documents_search_content BEGIN
+        INSERT INTO documents_fts(documents_fts, rowid, title_terms, content_terms, summary_terms, tags_terms)
+        VALUES ('delete', old.document_id, old.title_terms, old.content_terms, old.summary_terms, old.tags_terms);
+        INSERT INTO documents_fts(rowid, title_terms, content_terms, summary_terms, tags_terms)
+        VALUES (new.document_id, new.title_terms, new.content_terms, new.summary_terms, new.tags_terms);
+    END""",
+)
+
+_MIGRATIONS = {1: _MIGRATION_1, 2: _MIGRATION_2}
+
 
 def migrate(connection: sqlite3.Connection) -> None:
     """Migrate *connection* to the latest supported schema version."""
@@ -214,13 +252,13 @@ def migrate(connection: sqlite3.Connection) -> None:
             f"database schema version {current_version} is newer than supported "
             f"version {SCHEMA_VERSION}"
         )
-    if current_version == SCHEMA_VERSION:
-        return
-
-    with connection:
-        for statement in _MIGRATION_1:
-            connection.execute(statement)
-        connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    while current_version < SCHEMA_VERSION:
+        next_version = current_version + 1
+        with connection:
+            for statement in _MIGRATIONS[next_version]:
+                connection.execute(statement)
+            connection.execute(f"PRAGMA user_version = {next_version}")
+        current_version = next_version
 
 
 def rebuild_database(

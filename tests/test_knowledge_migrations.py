@@ -22,6 +22,8 @@ CORE_TABLES = {
     "jobs",
     "job_events",
     "document_merges",
+    "documents_search_content",
+    "documents_fts",
 }
 
 
@@ -37,7 +39,7 @@ def test_migration_creates_versioned_core_schema(tmp_path):
         )
     }
     assert CORE_TABLES <= tables
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
     assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
 
 
@@ -47,12 +49,12 @@ def test_migration_is_idempotent(tmp_path):
     migrate(connection)
     migrate(connection)
 
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
 
 
 def test_migration_rejects_database_from_a_newer_schema_version(tmp_path):
     connection = sqlite3.connect(tmp_path / "knowledge.db")
-    connection.execute("PRAGMA user_version = 2")
+    connection.execute("PRAGMA user_version = 3")
 
     with pytest.raises(RuntimeError, match="newer than supported"):
         migrate(connection)
@@ -261,6 +263,70 @@ def test_rebuild_replaces_target_only_after_successful_integrity_check(tmp_path)
     assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     assert connection.execute("SELECT id FROM documents").fetchone()[0] == 1
     assert not target.with_suffix(target.suffix + ".tmp").exists()
+
+
+def test_v1_to_v2_migration_creates_empty_external_content_search_projection(tmp_path):
+    connection = sqlite3.connect(tmp_path / "knowledge.db")
+    connection.execute("PRAGMA foreign_keys = ON")
+    from pkb.knowledge.migrations import _MIGRATION_1
+
+    with connection:
+        for statement in _MIGRATION_1:
+            connection.execute(statement)
+        connection.execute("PRAGMA user_version = 1")
+        connection.execute(
+            """INSERT INTO documents
+               (identity_key, title, plain_content, source_content_hash,
+                normalized_content_hash, normalization_version, schema_version)
+               VALUES ('legacy', '旧标题', '旧正文', 's', 'n', 1, 1)"""
+        )
+
+    migrate(connection)
+
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert connection.execute("SELECT count(*) FROM documents_search_content").fetchone()[0] == 0
+    sql = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE name='documents_fts'"
+    ).fetchone()[0]
+    assert "content='documents_search_content'" in sql
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(documents_search_content)")}
+    assert {
+        "document_id", "title", "content", "summary", "tags",
+        "title_terms", "content_terms", "summary_terms", "tags_terms",
+        "strategy", "tokenizer_version", "dictionary_fingerprint",
+    } <= columns
+
+
+def test_search_projection_triggers_follow_insert_update_and_delete(tmp_path):
+    connection = sqlite3.connect(tmp_path / "knowledge.db")
+    migrate(connection)
+    connection.execute(
+        """INSERT INTO documents
+           (id, identity_key, source_content_hash, normalized_content_hash,
+            normalization_version, schema_version)
+           VALUES (1, 'identity', 's', 'n', 1, 1)"""
+    )
+    connection.execute(
+        """INSERT INTO documents_search_content
+           (document_id, title, content, title_terms, content_terms,
+            strategy, tokenizer_version, dictionary_fingerprint)
+           VALUES (1, '甲', '乙', '甲', '乙', 'jieba', '1', 'dict')"""
+    )
+    assert connection.execute(
+        "SELECT title_terms FROM documents_fts WHERE rowid=1"
+    ).fetchone()[0] == "甲"
+
+    connection.execute(
+        "UPDATE documents_search_content SET title_terms='新词' WHERE document_id=1"
+    )
+    assert connection.execute(
+        "SELECT title_terms FROM documents_fts WHERE rowid=1"
+    ).fetchone()[0] == "新词"
+
+    connection.execute("DELETE FROM documents_search_content WHERE document_id=1")
+    assert connection.execute(
+        "SELECT count(*) FROM documents_fts WHERE rowid=1"
+    ).fetchone()[0] == 0
 
 
 def test_rebuild_preserves_target_and_cleans_temporary_file_when_builder_fails(tmp_path):
