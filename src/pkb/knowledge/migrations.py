@@ -12,12 +12,12 @@ SCHEMA_VERSION = 1
 
 _MIGRATION_1 = (
     """CREATE TABLE IF NOT EXISTS documents (
-        id TEXT PRIMARY KEY,
+        id INTEGER PRIMARY KEY,
         identity_key TEXT NOT NULL UNIQUE,
         source_type TEXT,
         title TEXT,
         author TEXT,
-        content TEXT,
+        plain_content TEXT,
         canonical_url TEXT,
         source_created_at TEXT,
         first_saved_at TEXT,
@@ -31,7 +31,7 @@ _MIGRATION_1 = (
     )""",
     """CREATE TABLE IF NOT EXISTS source_memberships (
         id INTEGER PRIMARY KEY,
-        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
         source TEXT NOT NULL,
         source_item_id TEXT NOT NULL,
         collection_id TEXT NOT NULL DEFAULT '',
@@ -44,21 +44,21 @@ _MIGRATION_1 = (
     )""",
     """CREATE TABLE IF NOT EXISTS document_url_aliases (
         id INTEGER PRIMARY KEY,
-        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
         url TEXT NOT NULL UNIQUE,
         observed_url TEXT,
         source TEXT,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )""",
     """CREATE TABLE IF NOT EXISTS document_id_aliases (
-        alias_document_id TEXT PRIMARY KEY,
-        canonical_document_id TEXT NOT NULL REFERENCES documents(id),
-        merge_id INTEGER,
+        alias_document_id INTEGER PRIMARY KEY,
+        canonical_document_id INTEGER NOT NULL REFERENCES documents(id),
+        merge_id INTEGER REFERENCES document_merges(id),
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )""",
     """CREATE TABLE IF NOT EXISTS media (
         id INTEGER PRIMARY KEY,
-        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
         remote_url TEXT NOT NULL,
         local_path TEXT,
         media_type TEXT,
@@ -72,7 +72,7 @@ _MIGRATION_1 = (
     )""",
     """CREATE TABLE IF NOT EXISTS derivations (
         id TEXT PRIMARY KEY,
-        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
         kind TEXT NOT NULL,
         payload_json TEXT NOT NULL,
         input_hash TEXT NOT NULL,
@@ -95,7 +95,7 @@ _MIGRATION_1 = (
         display_name TEXT NOT NULL
     )""",
     """CREATE TABLE IF NOT EXISTS document_tags (
-        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
         tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
         origin TEXT NOT NULL,
         confidence REAL,
@@ -110,7 +110,7 @@ _MIGRATION_1 = (
         parent_id INTEGER REFERENCES topics(id) ON DELETE SET NULL
     )""",
     """CREATE TABLE IF NOT EXISTS document_topics (
-        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
         topic_id INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
         origin TEXT NOT NULL,
         confidence REAL,
@@ -120,8 +120,8 @@ _MIGRATION_1 = (
     )""",
     """CREATE TABLE IF NOT EXISTS relations (
         id INTEGER PRIMARY KEY,
-        source_document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-        target_document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        source_document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        target_document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
         relation_type TEXT NOT NULL,
         score REAL,
         evidence TEXT NOT NULL,
@@ -131,7 +131,7 @@ _MIGRATION_1 = (
         UNIQUE(source_document_id, target_document_id, relation_type)
     )""",
     """CREATE TABLE IF NOT EXISTS reading_state (
-        document_id TEXT PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+        document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
         status TEXT NOT NULL DEFAULT 'unread',
         manual_priority INTEGER,
         priority_reason TEXT,
@@ -142,7 +142,7 @@ _MIGRATION_1 = (
     """CREATE TABLE IF NOT EXISTS jobs (
         id INTEGER PRIMARY KEY,
         job_type TEXT NOT NULL,
-        document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
         input_hash TEXT NOT NULL,
         pipeline_version TEXT NOT NULL,
         status TEXT NOT NULL,
@@ -166,8 +166,8 @@ _MIGRATION_1 = (
     )""",
     """CREATE TABLE IF NOT EXISTS document_merges (
         id INTEGER PRIMARY KEY,
-        survivor_document_id TEXT NOT NULL REFERENCES documents(id),
-        duplicate_document_id TEXT NOT NULL,
+        survivor_document_id INTEGER NOT NULL REFERENCES documents(id),
+        duplicate_document_id INTEGER NOT NULL,
         reason TEXT NOT NULL,
         reading_state_policy TEXT NOT NULL DEFAULT 'reject',
         metadata_json TEXT,
@@ -177,6 +177,7 @@ _MIGRATION_1 = (
     "CREATE INDEX IF NOT EXISTS idx_memberships_document ON source_memberships(document_id)",
     "CREATE INDEX IF NOT EXISTS idx_url_aliases_document ON document_url_aliases(document_id)",
     "CREATE INDEX IF NOT EXISTS idx_id_aliases_canonical ON document_id_aliases(canonical_document_id)",
+    "CREATE INDEX IF NOT EXISTS idx_id_aliases_merge ON document_id_aliases(merge_id)",
     "CREATE INDEX IF NOT EXISTS idx_media_document ON media(document_id, media_order)",
     "CREATE INDEX IF NOT EXISTS idx_derivations_document_kind ON derivations(document_id, kind, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_derivations_supersedes ON derivations(supersedes_derivation_id)",
@@ -191,6 +192,7 @@ _MIGRATION_1 = (
     "CREATE INDEX IF NOT EXISTS idx_relations_source ON relations(source_document_id, relation_type)",
     "CREATE INDEX IF NOT EXISTS idx_relations_target ON relations(target_document_id, relation_type)",
     "CREATE INDEX IF NOT EXISTS idx_relations_derivation ON relations(derivation_id)",
+    "CREATE INDEX IF NOT EXISTS idx_reading_state_document ON reading_state(document_id)",
     "CREATE INDEX IF NOT EXISTS idx_merges_survivor ON document_merges(survivor_document_id)",
 )
 

@@ -57,6 +57,59 @@ def test_migration_rejects_database_from_a_newer_schema_version(tmp_path):
         migrate(connection)
 
 
+def test_document_schema_matches_repository_contract(tmp_path):
+    connection = sqlite3.connect(tmp_path / "knowledge.db")
+    migrate(connection)
+
+    document_columns = {
+        row[1]: row[2] for row in connection.execute("PRAGMA table_info(documents)")
+    }
+    assert document_columns["id"] == "INTEGER"
+    assert "plain_content" in document_columns
+    assert "content" not in document_columns
+
+    document_reference_columns = {
+        "source_memberships": "document_id",
+        "document_url_aliases": "document_id",
+        "media": "document_id",
+        "derivations": "document_id",
+        "document_tags": "document_id",
+        "document_topics": "document_id",
+        "reading_state": "document_id",
+        "jobs": "document_id",
+        "document_id_aliases": "canonical_document_id",
+        "document_merges": "survivor_document_id",
+    }
+    for table, column in document_reference_columns.items():
+        columns = {
+            row[1]: row[2] for row in connection.execute(f"PRAGMA table_info({table})")
+        }
+        assert columns[column] == "INTEGER", f"{table}.{column}"
+
+    relation_columns = {
+        row[1]: row[2] for row in connection.execute("PRAGMA table_info(relations)")
+    }
+    assert relation_columns["source_document_id"] == "INTEGER"
+    assert relation_columns["target_document_id"] == "INTEGER"
+
+    merge_columns = {
+        row[1]: row[2]
+        for row in connection.execute("PRAGMA table_info(document_merges)")
+    }
+    assert merge_columns["duplicate_document_id"] == "INTEGER"
+
+
+def test_document_id_alias_records_the_merge_that_created_it(tmp_path):
+    connection = sqlite3.connect(tmp_path / "knowledge.db")
+    migrate(connection)
+
+    foreign_keys = {
+        (row[3], row[2], row[4])
+        for row in connection.execute("PRAGMA foreign_key_list(document_id_aliases)")
+    }
+    assert ("merge_id", "document_merges", "id") in foreign_keys
+
+
 def test_every_foreign_key_column_has_a_leading_index(tmp_path):
     connection = sqlite3.connect(tmp_path / "knowledge.db")
     migrate(connection)
@@ -87,7 +140,7 @@ def test_schema_enforces_identity_membership_alias_and_job_uniqueness(tmp_path):
         """INSERT INTO documents
            (id, identity_key, source_content_hash, normalized_content_hash,
             normalization_version, schema_version)
-           VALUES ('doc-1', 'identity-1', 'source-hash', 'normalized-hash', 1, 1)"""
+           VALUES (1, 'identity-1', 'source-hash', 'normalized-hash', 1, 1)"""
     )
 
     with pytest.raises(sqlite3.IntegrityError):
@@ -95,39 +148,39 @@ def test_schema_enforces_identity_membership_alias_and_job_uniqueness(tmp_path):
             """INSERT INTO documents
                (id, identity_key, source_content_hash, normalized_content_hash,
                 normalization_version, schema_version)
-               VALUES ('doc-2', 'identity-1', 'other-source', 'other-normalized', 1, 1)"""
+               VALUES (2, 'identity-1', 'other-source', 'other-normalized', 1, 1)"""
         )
 
     connection.execute(
         """INSERT INTO source_memberships
            (document_id, source, source_item_id, collection_id)
-           VALUES ('doc-1', 'zhihu', 'answer-1', 'favorites-1')"""
+           VALUES (1, 'zhihu', 'answer-1', 'favorites-1')"""
     )
     with pytest.raises(sqlite3.IntegrityError):
         connection.execute(
             """INSERT INTO source_memberships
                (document_id, source, source_item_id, collection_id)
-               VALUES ('doc-1', 'zhihu', 'answer-1', 'favorites-1')"""
+               VALUES (1, 'zhihu', 'answer-1', 'favorites-1')"""
         )
 
     connection.execute(
-        "INSERT INTO document_url_aliases (document_id, url) VALUES ('doc-1', 'https://example.test/1')"
+        "INSERT INTO document_url_aliases (document_id, url) VALUES (1, 'https://example.test/1')"
     )
     with pytest.raises(sqlite3.IntegrityError):
         connection.execute(
-            "INSERT INTO document_url_aliases (document_id, url) VALUES ('doc-1', 'https://example.test/1')"
+            "INSERT INTO document_url_aliases (document_id, url) VALUES (1, 'https://example.test/1')"
         )
 
     connection.execute(
         """INSERT INTO jobs
            (job_type, document_id, input_hash, pipeline_version, status)
-           VALUES ('derive', 'doc-1', 'input-1', 'v1', 'pending')"""
+           VALUES ('derive', 1, 'input-1', 'v1', 'pending')"""
     )
     with pytest.raises(sqlite3.IntegrityError):
         connection.execute(
             """INSERT INTO jobs
                (job_type, document_id, input_hash, pipeline_version, status)
-               VALUES ('derive', 'doc-1', 'input-1', 'v1', 'pending')"""
+               VALUES ('derive', 1, 'input-1', 'v1', 'pending')"""
         )
 
 
@@ -152,14 +205,14 @@ def test_rebuild_replaces_target_only_after_successful_integrity_check(tmp_path)
             """INSERT INTO documents
                (id, identity_key, source_content_hash, normalized_content_hash,
                 normalization_version, schema_version)
-               VALUES ('doc-1', 'identity-1', 'source-hash', 'normalized-hash', 1, 1)"""
+               VALUES (1, 'identity-1', 'source-hash', 'normalized-hash', 1, 1)"""
         )
 
     rebuild_database(target, builder)
 
     connection = sqlite3.connect(target)
     assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-    assert connection.execute("SELECT id FROM documents").fetchone()[0] == "doc-1"
+    assert connection.execute("SELECT id FROM documents").fetchone()[0] == 1
     assert not target.with_suffix(target.suffix + ".tmp").exists()
 
 
@@ -173,7 +226,7 @@ def test_rebuild_preserves_target_and_cleans_temporary_file_when_builder_fails(t
             """INSERT INTO documents
                (id, identity_key, source_content_hash, normalized_content_hash,
                 normalization_version, schema_version)
-               VALUES ('doc-1', 'identity-1', 'source-hash', 'normalized-hash', 1, 1)"""
+               VALUES (1, 'identity-1', 'source-hash', 'normalized-hash', 1, 1)"""
         )
         raise RuntimeError("build failed")
 
