@@ -538,6 +538,40 @@ class KnowledgeRepository:
     def document(self, document_id: int) -> sqlite3.Row | None:
         return self.connection.execute("SELECT * FROM documents WHERE id=?", (document_id,)).fetchone()
 
+    def get_related(self, document_id: int, *, limit: int = 10) -> list[dict[str, Any]]:
+        """Return accepted relation records adjacent to one document."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 50:
+            raise ValueError("limit must be an integer in 1..50")
+        self._require_document(document_id)
+        rows = self.connection.execute(
+            """SELECT other.id AS document_id, other.identity_key AS identity,
+                      other.title, other.canonical_url AS url,
+                      relation.relation_type, relation.score, relation.evidence,
+                      relation.candidate_evidence_json, relation.explanation
+               FROM relations AS relation
+               JOIN documents AS other ON other.id = CASE
+                 WHEN relation.source_document_id=? THEN relation.target_document_id
+                 ELSE relation.source_document_id END
+               WHERE relation.source_document_id=? OR relation.target_document_id=?
+               ORDER BY relation.score DESC, other.identity_key, relation.id
+               LIMIT ?""",
+            (document_id, document_id, document_id, limit),
+        ).fetchall()
+        return [
+            {
+                "document_id": int(row["document_id"]),
+                "identity": row["identity"],
+                "title": row["title"] or "",
+                "url": row["url"] or "",
+                "relation_type": row["relation_type"],
+                "score": row["score"],
+                "evidence": json.loads(row["evidence"]),
+                "candidate_evidence": json.loads(row["candidate_evidence_json"]),
+                "explanation": row["explanation"],
+            }
+            for row in rows
+        ]
+
     def count_memberships(self, document_id: int) -> int:
         return self.connection.execute("SELECT COUNT(*) FROM source_memberships WHERE document_id=?", (document_id,)).fetchone()[0]
 
