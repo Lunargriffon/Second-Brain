@@ -139,29 +139,35 @@ class RelationCandidateBuilder:
                 "SELECT id FROM documents ORDER BY id LIMIT ?", (document_limit,)
             )
         )
-        seen: set[tuple[int, int]] = set()
-        pairs: list[CandidatePair] = []
-        documents_considered = 0
+        pair_scores: dict[tuple[int, int], float] = {}
+        pair_evidence: dict[tuple[int, int], set[str]] = {}
         for document_id in document_ids:
-            documents_considered += 1
             for candidate in self.for_document(
                 document_id, per_document_limit=per_document_limit
             ):
                 key = tuple(sorted((document_id, candidate.document_id)))
-                if key in seen:
-                    continue
-                seen.add(key)
-                pairs.append(
-                    CandidatePair(
-                        source_document_id=key[0],
-                        target_document_id=key[1],
-                        score=candidate.score,
-                        evidence_sources=candidate.evidence_sources,
-                    )
-                )
-                if len(pairs) == pair_limit:
-                    return RelationDryRun(documents_considered, tuple(pairs))
-        return RelationDryRun(documents_considered, tuple(pairs))
+                pair_scores[key] = max(pair_scores.get(key, candidate.score), candidate.score)
+                pair_evidence.setdefault(key, set()).update(candidate.evidence_sources)
+        pairs = (
+            CandidatePair(
+                source_document_id=key[0],
+                target_document_id=key[1],
+                score=score,
+                evidence_sources=tuple(sorted(pair_evidence[key])),
+            )
+            for key, score in pair_scores.items()
+        )
+        selected = tuple(
+            sorted(
+                pairs,
+                key=lambda pair: (
+                    -pair.score,
+                    pair.source_document_id,
+                    pair.target_document_id,
+                ),
+            )[:pair_limit]
+        )
+        return RelationDryRun(len(document_ids), selected)
 
     @staticmethod
     def _admit(

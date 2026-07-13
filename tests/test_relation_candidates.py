@@ -267,6 +267,48 @@ def test_corpus_dry_run_stops_at_exact_pair_limit_without_provider(relation_db):
     assert all(pair.source_document_id < pair.target_document_id for pair in result.pairs)
 
 
+def test_corpus_dry_run_selects_global_top_pair_and_merges_bidirectional_evidence(tmp_path):
+    database = tmp_path / "global-ranking.sqlite3"
+    connection = sqlite3.connect(database)
+    connection.row_factory = sqlite3.Row
+    migrate(connection)
+    for document_id, title in (
+        (1, "early one"),
+        (2, "early two"),
+        (3, "later seed"),
+        (4, "quantum"),
+    ):
+        _document(connection, document_id, title)
+    _membership(connection, 1, "early", "2026-01-01T00:00:00+00:00")
+    _membership(connection, 2, "early", "2026-01-02T00:00:00+00:00")
+    for document_id in (3, 4):
+        _label(connection, document_id, "strong", kind="tag")
+        _label(connection, document_id, "strong-topic", kind="topic")
+    _derivation(connection, 3, "quantum")
+    connection.commit()
+    connection.close()
+    search = SearchIndex(database)
+    search.rebuild()
+    search.close()
+
+    with RelationCandidateBuilder(database) as builder:
+        result = builder.dry_run(
+            document_limit=4,
+            per_document_limit=1,
+            pair_limit=1,
+        )
+
+    assert result.documents_considered == 4
+    assert result.pairs[0].source_document_id == 3
+    assert result.pairs[0].target_document_id == 4
+    assert result.pairs[0].evidence_sources == (
+        "fts_key_point",
+        "fts_summary",
+        "shared_tag",
+        "shared_topic",
+    )
+
+
 @pytest.mark.parametrize(
     ("method", "kwargs"),
     (
