@@ -2,6 +2,8 @@ from pathlib import Path
 
 
 WEB_DECISION = Path("docs/web-interface-decision.md")
+OPERATIONS_GUIDE = Path("docs/second-brain-operations.md")
+README = Path("README.md")
 
 
 def test_web_decision_has_explicit_evidence_gate():
@@ -22,3 +24,41 @@ def test_web_decision_has_explicit_evidence_gate():
     assert "Speculation" in text
     assert text.rstrip().endswith("decision: defer")
     assert text.count("decision: defer") == 1
+
+
+def test_operations_guide_covers_required_workflows():
+    text = OPERATIONS_GUIDE.read_text(encoding="utf-8")
+
+    for heading in (
+        "## Build the Index",
+        "## Search",
+        "## Derive a Small Batch",
+        "## Export the Vault",
+        "## Daily Review",
+        "## Recover Expired Jobs",
+        "## Rebuild Projections",
+        "## Back Up Human State",
+    ):
+        assert heading in text
+
+    for safety_term in (
+        "--dry-run",
+        "--limit",
+        "data/raw",
+        "data/frozen",
+        "vault/user",
+        "reading_state",
+        "normalization",
+        "stdio",
+    ):
+        assert safety_term in text
+
+
+def test_readme_links_shipped_guides_and_has_clean_workflow():
+    text = README.read_text(encoding="utf-8")
+
+    assert "second-brain-architecture-design.md" in text
+    assert "second-brain-operations.md" in text
+    assert "index build -> search/derive small batch -> wiki export -> review today" in text
+    assert "�" not in text
+    assert "鈹" not in text
