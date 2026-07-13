@@ -13,7 +13,7 @@ from .migrations import migrate
 from .models import NormalizedDocument
 from .urls import canonicalize_url, platform_identity
 from .fingerprint import derivation_input_hash
-from pkb.review import DocumentNotFoundError, READING_STATUSES, ReadingState, normalize_tag
+from .review_models import DocumentNotFoundError, READING_STATUSES, ReadingState, normalize_tag
 
 
 class MergeConflictError(ValueError):
