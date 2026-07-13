@@ -12,8 +12,7 @@ from pkb.sources.base import SourceAdapter
 from pkb.sources.x_bookmarks import XBookmarkAdapter
 from pkb.sources.zhihu import ZhihuAdapter
 
-from .fingerprint import normalized_content_hash, source_content_hash
-from pkb.derive.workflows import derivation_input_hash
+from .fingerprint import derivation_input_hash, normalized_content_hash, source_content_hash
 from .reports import IndexError, IndexReport
 from .repository import KnowledgeRepository
 from .search import SearchIndex

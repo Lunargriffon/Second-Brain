@@ -165,7 +165,7 @@ def test_source_edit_queues_one_new_job_and_preserves_old_derivation(
     assert changed.derivation_jobs_queued == 1
     assert repository.connection.execute("SELECT 1 FROM derivations WHERE id='old'").fetchone()
     current = repository.document(document_id)
-    from pkb.derive.workflows import derivation_input_hash
+    from pkb.knowledge.fingerprint import derivation_input_hash
     pending = repository.connection.execute(
         "SELECT * FROM jobs WHERE document_id=? AND input_hash=?",
         (document_id, derivation_input_hash(

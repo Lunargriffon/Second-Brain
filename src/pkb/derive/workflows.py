@@ -2,22 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
 from pkb.derive.prompts import ARTICLE_PROMPT_VERSION
-
-
-def derivation_input_hash(source_hash: str, normalized_hash: str, normalization_version: int) -> str:
-    value = json.dumps(
-        [source_hash, normalized_hash, normalization_version],
-        ensure_ascii=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+from pkb.knowledge.fingerprint import derivation_input_hash
 
 
 @dataclass(frozen=True)

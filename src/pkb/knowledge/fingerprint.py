@@ -100,3 +100,11 @@ def normalized_content_hash(
             "media_urls": media_urls,
         }
     )
+
+
+def derivation_input_hash(
+    source_hash: str, normalized_hash: str, normalization_version: int
+) -> str:
+    """Fingerprint every content boundary that determines a derivation input."""
+
+    return _hash([source_hash, normalized_hash, normalization_version])
