@@ -7,7 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 _MIGRATION_1 = (
@@ -249,7 +249,18 @@ _MIGRATION_4 = (
     "ALTER TABLE documents ADD COLUMN source_observed_at TEXT",
 )
 
-_MIGRATIONS = {1: _MIGRATION_1, 2: _MIGRATION_2, 3: _MIGRATION_3, 4: _MIGRATION_4}
+_MIGRATION_5 = (
+    """CREATE INDEX IF NOT EXISTS idx_memberships_collection_time
+       ON source_memberships(source, collection_id, observed_at, document_id)""",
+)
+
+_MIGRATIONS = {
+    1: _MIGRATION_1,
+    2: _MIGRATION_2,
+    3: _MIGRATION_3,
+    4: _MIGRATION_4,
+    5: _MIGRATION_5,
+}
 
 
 def migrate(connection: sqlite3.Connection) -> None:
