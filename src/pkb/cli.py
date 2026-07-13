@@ -223,6 +223,15 @@ def _add_derivation_parsers(subparsers: argparse._SubParsersAction) -> None:
     articles.add_argument("--env", default=".env")
     articles.add_argument("--report", default="data/derived/runs.jsonl")
     _bounded(articles, dry_run=True)
+    relations = commands.add_parser("relations")
+    relations.add_argument("--db", required=True)
+    relations.add_argument("--env", default=".env")
+    relations.add_argument("--report", default="data/derived/relation-runs.jsonl")
+    relations.add_argument("--document-limit", type=int)
+    relations.add_argument("--per-document-limit", type=int)
+    relations.add_argument("--pair-limit", type=int)
+    relations.add_argument("--unlimited", action="store_true")
+    relations.add_argument("--dry-run", action="store_true")
     status = commands.add_parser("status")
     status.add_argument("--db", required=True)
     status.add_argument("--format", choices=("text", "json"), default="text")
@@ -573,6 +582,8 @@ def _run_derivation(args: argparse.Namespace, provider: DerivationProvider | Non
         else:
             print(" ".join(f"{key}={value}" for key, value in status.items()))
         return 0
+    if args.derive_command == "relations":
+        return _run_relation_derivation(args, provider)
     try:
         limit = _effective_limit(args)
     except ValueError as exc:
@@ -616,6 +627,69 @@ def _run_derivation(args: argparse.Namespace, provider: DerivationProvider | Non
     ).run(limit=scope.documents)
     print(
         f"processed={result.processed} succeeded={result.succeeded} "
+        f"failed={result.failed} stopped={str(result.stopped).lower()}"
+    )
+    return 1 if result.stopped else 0
+
+
+def _run_relation_derivation(
+    args: argparse.Namespace, provider: DerivationProvider | None
+) -> int:
+    from pkb.derive.prompts import RELATION_PROMPT_VERSION
+    from pkb.derive.relations import (
+        MAX_DOCUMENT_LIMIT,
+        MAX_PAIR_LIMIT,
+        MAX_PER_DOCUMENT_LIMIT,
+        RelationCandidateBuilder,
+        RelationPipeline,
+    )
+
+    supplied = (args.document_limit, args.per_document_limit, args.pair_limit)
+    if args.unlimited:
+        if any(value is not None for value in supplied):
+            print("--unlimited cannot be combined with relation limits", file=__import__("sys").stderr)
+            return 2
+        bounds = (MAX_DOCUMENT_LIMIT, MAX_PER_DOCUMENT_LIMIT, MAX_PAIR_LIMIT)
+    else:
+        if any(value is None for value in supplied):
+            print(
+                "document-limit, per-document-limit, and pair-limit are required without --unlimited",
+                file=__import__("sys").stderr,
+            )
+            return 2
+        bounds = supplied
+    document_limit, per_document_limit, pair_limit = bounds
+    try:
+        with RelationCandidateBuilder(Path(args.db), read_only=args.dry_run) as builder:
+            preview = builder.dry_run(
+                document_limit=document_limit,
+                per_document_limit=per_document_limit,
+                pair_limit=pair_limit,
+            )
+    except ValueError as exc:
+        print(str(exc), file=__import__("sys").stderr)
+        return 2
+    print(
+        f"documents={preview.documents_considered} pairs={preview.pair_count} "
+        f"prompt_version={RELATION_PROMPT_VERSION}"
+    )
+    if args.dry_run or preview.pair_count == 0:
+        return 0
+    try:
+        provider = provider or _build_derivation_provider(Path(args.env))
+    except (ConfigError, ValueError):
+        print("Derivation provider configuration is missing or invalid.", file=__import__("sys").stderr)
+        return 1
+    result = RelationPipeline(
+        Path(args.db), provider, run_log=Path(args.report)
+    ).run(
+        document_limit=document_limit,
+        per_document_limit=per_document_limit,
+        pair_limit=pair_limit,
+    )
+    print(
+        f"processed={result.processed} accepted={result.accepted} "
+        f"no_relation={result.no_relation} invalid={result.invalid} "
         f"failed={result.failed} stopped={str(result.stopped).lower()}"
     )
     return 1 if result.stopped else 0

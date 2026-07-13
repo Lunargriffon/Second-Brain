@@ -7,7 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 _MIGRATION_1 = (
@@ -254,12 +254,39 @@ _MIGRATION_5 = (
        ON source_memberships(source, collection_id, observed_at, document_id)""",
 )
 
+_MIGRATION_6 = (
+    "ALTER TABLE relations ADD COLUMN candidate_evidence_json TEXT NOT NULL DEFAULT '[]'",
+    "ALTER TABLE relations ADD COLUMN explanation TEXT NOT NULL DEFAULT ''",
+    """CREATE TABLE relation_pair_state (
+        source_document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        target_document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        derivation_id TEXT NOT NULL REFERENCES derivations(id),
+        decision_type TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY(source_document_id, target_document_id),
+        CHECK(source_document_id <> target_document_id)
+    )""",
+    """INSERT INTO relation_pair_state
+       (source_document_id, target_document_id, derivation_id, decision_type)
+       SELECT relation.source_document_id, relation.target_document_id,
+              relation.derivation_id, relation.relation_type
+       FROM relations AS relation
+       JOIN (
+           SELECT source_document_id, target_document_id, MAX(id) AS id
+           FROM relations WHERE derivation_id IS NOT NULL
+           GROUP BY source_document_id, target_document_id
+       ) AS latest ON latest.id=relation.id""",
+    "CREATE INDEX idx_relation_pair_state_target ON relation_pair_state(target_document_id)",
+    "CREATE INDEX idx_relation_pair_state_derivation ON relation_pair_state(derivation_id)",
+)
+
 _MIGRATIONS = {
     1: _MIGRATION_1,
     2: _MIGRATION_2,
     3: _MIGRATION_3,
     4: _MIGRATION_4,
     5: _MIGRATION_5,
+    6: _MIGRATION_6,
 }
 
 

@@ -2,7 +2,7 @@ import sqlite3
 
 import pytest
 
-from pkb.knowledge.migrations import migrate, rebuild_database
+from pkb.knowledge.migrations import SCHEMA_VERSION, migrate, rebuild_database
 
 
 CORE_TABLES = {
@@ -18,6 +18,7 @@ CORE_TABLES = {
     "topics",
     "document_topics",
     "relations",
+    "relation_pair_state",
     "reading_state",
     "jobs",
     "job_events",
@@ -39,7 +40,7 @@ def test_migration_creates_versioned_core_schema(tmp_path):
         )
     }
     assert CORE_TABLES <= tables
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     columns = {row[1] for row in connection.execute("PRAGMA table_info(documents)")}
     assert "source_observed_at" in columns
     assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
@@ -51,12 +52,12 @@ def test_migration_is_idempotent(tmp_path):
     migrate(connection)
     migrate(connection)
 
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
 
 
 def test_migration_rejects_database_from_a_newer_schema_version(tmp_path):
     connection = sqlite3.connect(tmp_path / "knowledge.db")
-    connection.execute("PRAGMA user_version = 6")
+    connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
 
     with pytest.raises(RuntimeError, match="newer than supported"):
         migrate(connection)
@@ -97,6 +98,8 @@ def test_document_schema_matches_repository_contract(tmp_path):
     }
     assert relation_columns["source_document_id"] == "INTEGER"
     assert relation_columns["target_document_id"] == "INTEGER"
+    assert relation_columns["candidate_evidence_json"] == "TEXT"
+    assert relation_columns["explanation"] == "TEXT"
 
     merge_columns = {
         row[1]: row[2]
@@ -285,7 +288,7 @@ def test_v1_to_v2_migration_creates_empty_external_content_search_projection(tmp
 
     migrate(connection)
 
-    assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert connection.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert connection.execute("SELECT count(*) FROM documents_search_content").fetchone()[0] == 0
     sql = connection.execute(
         "SELECT sql FROM sqlite_master WHERE name='documents_fts'"
