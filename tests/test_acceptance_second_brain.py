@@ -2,7 +2,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from tools.acceptance_second_brain import _logical_hash, run_acceptance
+from tools.acceptance_second_brain import _logical_hash, main, run_acceptance
 
 
 FIXTURE_RAW = Path("tests/fixtures/knowledge")
@@ -92,3 +92,14 @@ def test_no_supported_documents_is_an_explained_failure(tmp_path: Path):
     assert "no_supported_documents" in result.failures
     assert result.document_count == 0
     assert result.logical_hash
+
+
+def test_cli_releases_temporary_database_before_cleanup(tmp_path: Path):
+    report = tmp_path / "acceptance.json"
+
+    assert main([
+        "--raw-dir", str(FIXTURE_RAW),
+        "--output", str(report),
+        "--accepted-query", "学习",
+    ]) == 0
+    assert json.loads(report.read_text(encoding="utf-8"))["status"] == "ok"

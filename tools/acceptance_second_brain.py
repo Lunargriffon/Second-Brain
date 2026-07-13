@@ -9,6 +9,7 @@ import os
 import sqlite3
 import tempfile
 from dataclasses import asdict, dataclass
+from contextlib import closing
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -104,7 +105,7 @@ def _fake_response(source_text: str) -> dict[str, object]:
 
 
 def _pending_responses(database: Path) -> tuple[list[dict[str, object]], int]:
-    with sqlite3.connect(database) as connection:
+    with closing(sqlite3.connect(database)) as connection:
         rows = connection.execute(
             """SELECT j.id, d.plain_content FROM jobs AS j
                JOIN documents AS d ON d.id=j.document_id
@@ -119,6 +120,7 @@ def _pending_responses(database: Path) -> tuple[list[dict[str, object]], int]:
                 f"WHERE id IN ({placeholders})",
                 empty_job_ids,
             )
+            connection.commit()
     responses = [_fake_response(row[1]) for row in rows if (row[1] or "").strip()]
     return responses, len(empty_job_ids)
 
@@ -129,7 +131,7 @@ def _rows(connection: sqlite3.Connection, query: str) -> list[dict[str, object]]
 
 
 def _logical_hash(database: Path, vault: Path) -> str:
-    with sqlite3.connect(database) as connection:
+    with closing(sqlite3.connect(database)) as connection:
         documents = _rows(
             connection,
             """SELECT identity_key, source_type, title, author, plain_content,
@@ -290,7 +292,7 @@ def run_acceptance(
     if frozen_before_map != frozen_after_map:
         failures.append("frozen_evidence_mutated")
 
-    with sqlite3.connect(database) as connection:
+    with closing(sqlite3.connect(database)) as connection:
         derivation_count = int(
             connection.execute(
                 "SELECT COUNT(*) FROM derivations WHERE kind='article' AND status='accepted'"
