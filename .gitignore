@@ -30,11 +30,9 @@ data/index/
 data/derived/
 data/state/
 
-vault/articles/
-vault/_index/
-vault/sources/
-vault/daily/
-vault/attachments/
+vault/*
+!vault/user/
+vault/user/*
 !vault/user/.gitkeep
 
 # Local editor and OS files.
