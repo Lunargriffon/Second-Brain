@@ -31,6 +31,8 @@ data/derived/
 data/state/
 
 vault/*
+vault/articles/
+vault/_index/
 !vault/user/
 vault/user/*
 !vault/user/.gitkeep
