@@ -25,6 +25,10 @@ class ProviderInvalidRequestError(ProviderError):
     """The request or structured provider response was invalid."""
 
 
+class ProviderMalformedResponseError(ProviderInvalidRequestError):
+    """The provider returned output that cannot be validated as a model result."""
+
+
 class ProviderTemporaryError(ProviderError):
     """A transport or server failure may succeed when retried."""
 
@@ -110,7 +114,7 @@ class OpenAICompatibleProvider:
         except HTTPError as exc:
             raise _classified_http_error(exc.code) from None
         except json.JSONDecodeError:
-            raise ProviderInvalidRequestError(
+            raise ProviderMalformedResponseError(
                 "provider returned an invalid structured response"
             ) from None
         except (URLError, TimeoutError, OSError):
@@ -120,11 +124,11 @@ class OpenAICompatibleProvider:
             content = envelope["choices"][0]["message"]["content"]
             result = json.loads(content)
         except (KeyError, IndexError, TypeError, json.JSONDecodeError):
-            raise ProviderInvalidRequestError(
+            raise ProviderMalformedResponseError(
                 "provider returned an invalid structured response"
             ) from None
         if not isinstance(result, dict):
-            raise ProviderInvalidRequestError(
+            raise ProviderMalformedResponseError(
                 "provider returned an invalid structured response"
             )
         return result

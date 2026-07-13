@@ -95,6 +95,7 @@ class JobQueue:
         self,
         worker_id: str,
         *,
+        job_type: str | None = None,
         now: datetime | None = None,
         lease: timedelta = DEFAULT_LEASE,
     ) -> Job | None:
@@ -105,12 +106,14 @@ class JobQueue:
         self.connection.execute("BEGIN IMMEDIATE")
         try:
             while True:
+                type_clause = " AND job_type=?" if job_type is not None else ""
+                parameters: tuple[object, ...] = (timestamp, job_type) if job_type is not None else (timestamp,)
                 row = self.connection.execute(
                     """SELECT * FROM jobs
-                       WHERE status='pending'
-                          OR (status='running' AND lease_expires_at<=?)
-                       ORDER BY created_at, id LIMIT 1""",
-                    (timestamp,),
+                       WHERE (status='pending'
+                          OR (status='running' AND lease_expires_at<=?))"""
+                    + type_clause + " ORDER BY created_at, id LIMIT 1",
+                    parameters,
                 ).fetchone()
                 if row is None:
                     self.connection.commit()
