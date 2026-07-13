@@ -87,6 +87,9 @@ def main(argv: Sequence[str] | None = None, *, provider: DerivationProvider | No
     if args.command == "derive":
         return _run_derivation(args, provider)
 
+    if args.command == "wiki":
+        return _run_wiki(args)
+
     parser.error("unsupported command")
     return 2
 
@@ -105,6 +108,7 @@ def _build_parser() -> argparse.ArgumentParser:
     images_subparsers = images_parser.add_subparsers(dest="source", required=True)
     _add_knowledge_parsers(subparsers)
     _add_derivation_parsers(subparsers)
+    _add_wiki_parsers(subparsers)
 
     zhihu_parser = export_subparsers.add_parser("zhihu")
     zhihu_parser.add_argument("--collection-url", required=True)
@@ -226,6 +230,23 @@ def _add_derivation_parsers(subparsers: argparse._SubParsersAction) -> None:
     migrate_parser.add_argument("--db", required=True)
     migrate_parser.add_argument("--normalization-version", type=int, required=True)
     _bounded(migrate_parser, dry_run=True)
+
+
+def _add_wiki_parsers(subparsers: argparse._SubParsersAction) -> None:
+    wiki = subparsers.add_parser("wiki")
+    commands = wiki.add_subparsers(dest="wiki_command", required=True)
+    export = commands.add_parser("export")
+    export.add_argument("--db", required=True)
+    export.add_argument("--vault", required=True)
+    export.add_argument("--copy-attachments", action="store_true")
+    export.add_argument("--report")
+    check = commands.add_parser("check")
+    check.add_argument("--vault", required=True)
+    check.add_argument("--format", choices=("text", "json"), default="text")
+    clean = commands.add_parser("clean")
+    clean.add_argument("--vault", required=True)
+    clean.add_argument("--stale-only", action="store_true", required=True)
+    clean.add_argument("--dry-run", action="store_true")
 
 
 def _build_zhihu_client(args: argparse.Namespace) -> FakeZhihuClient | RealZhihuClient:
@@ -579,6 +600,41 @@ def _run_derivation(args: argparse.Namespace, provider: DerivationProvider | Non
         f"failed={result.failed} stopped={str(result.stopped).lower()}"
     )
     return 1 if result.stopped else 0
+
+
+def _run_wiki(args: argparse.Namespace) -> int:
+    from pkb.wiki.exporter import VaultExporter
+
+    vault = Path(args.vault)
+    if args.wiki_command == "export":
+        from pkb.wiki.projection import RENDERER_VERSION, build_generated_files
+
+        files = build_generated_files(Path(args.db), vault, copy_attachments=args.copy_attachments)
+        result = VaultExporter(files, renderer_version=RENDERER_VERSION).export(vault)
+        summary = {key: len(getattr(result, key)) for key in ("written", "unchanged", "conflicts", "stale", "removed")}
+        if args.report:
+            report = Path(args.report)
+            report.parent.mkdir(parents=True, exist_ok=True)
+            report.write_text(json.dumps(summary, sort_keys=True) + "\n", encoding="utf-8")
+        print(" ".join(f"{key}={value}" for key, value in summary.items()))
+        return 1 if result.conflicts else 0
+    if args.wiki_command == "check":
+        report = VaultExporter.inspect(vault)
+        summary = {
+            "ok": report.ok,
+            **{key: len(getattr(report, key)) for key in (
+                "broken_links", "creatable_user_notes", "missing_source_ids",
+                "manifest_mismatches", "modified", "unmarked_collisions", "stale",
+            )},
+        }
+        if args.format == "json":
+            print(json.dumps(summary, sort_keys=True))
+        else:
+            print(" ".join(f"{key}={str(value).lower() if isinstance(value, bool) else value}" for key, value in summary.items()))
+        return 0 if report.ok else 1
+    result = VaultExporter.clean_stale(vault, dry_run=args.dry_run)
+    print(f"stale={len(result.stale)} removed={len(result.removed)} conflicts={len(result.conflicts)} dry_run={str(args.dry_run).lower()}")
+    return 1 if result.conflicts else 0
 
 
 def _build_derivation_provider(env_path: Path) -> DerivationProvider:

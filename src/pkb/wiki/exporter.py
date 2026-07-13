@@ -21,7 +21,7 @@ _WIKILINK = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]*)?\]\]")
 @dataclass(frozen=True)
 class GeneratedFile:
     path: str
-    content: str
+    content: str | bytes
     document_id: str
 
 
@@ -128,9 +128,9 @@ class VaultExporter:
             path = _safe_path(item.path)
             if path in desired:
                 raise ValueError(f"duplicate generated path: {path}")
-            if not isinstance(item.content, str) or not isinstance(item.document_id, str) or not item.document_id:
-                raise ValueError("generated content and document_id must be strings")
-            if not _GENERATED_MARKER.search(item.content):
+            if not isinstance(item.content, (str, bytes)) or not isinstance(item.document_id, str) or not item.document_id:
+                raise ValueError("generated content must be text or bytes and document_id must be a string")
+            if path.endswith(".md") and (not isinstance(item.content, str) or not _GENERATED_MARKER.search(item.content)):
                 raise ValueError(f"generated marker missing from {path}")
             desired[path] = GeneratedFile(path, item.content, item.document_id)
         self._files = desired
@@ -156,6 +156,8 @@ class VaultExporter:
             if relative in result:
                 raise ValueError("duplicate generated manifest path")
             result[relative] = {key: raw[key] for key in ("path", *required)}
+            if raw.get("stale") is True:
+                result[relative]["stale"] = True
         return result
 
     def _manifest_bytes(self, entries: dict[str, dict[str, str]]) -> bytes:
@@ -206,7 +208,7 @@ class VaultExporter:
         for relative in sorted(self._files):
             item = self._files[relative]
             target = _target(vault, relative)
-            data = item.content.encode("utf-8")
+            data = item.content.encode("utf-8") if isinstance(item.content, str) else item.content
             digest = _fingerprint(data)
             old = previous.get(relative)
             if target.exists():
@@ -245,7 +247,7 @@ class VaultExporter:
                 target.unlink()
                 removed.append(relative)
             else:
-                next_entries[relative] = old
+                next_entries[relative] = {**old, "stale": True}
 
         # Never create an ownership manifest when every desired path collided.
         if next_entries or (vault / MANIFEST).exists():
@@ -285,7 +287,8 @@ class VaultExporter:
         for relative, item in self._files.items():
             target = _target(vault, relative)
             old = manifest.get(relative)
-            desired_fingerprint = _fingerprint(item.content.encode("utf-8"))
+            desired = item.content.encode("utf-8") if isinstance(item.content, str) else item.content
+            desired_fingerprint = _fingerprint(desired)
             if (
                 old is None
                 or old["document_id"] != item.document_id
@@ -341,3 +344,48 @@ class VaultExporter:
             tuple(sorted(unmarked)),
             tuple(sorted(stale)),
         )
+
+    @classmethod
+    def inspect(cls, vault: Path) -> CheckReport:
+        """Check manifest-owned files without inventing an empty desired projection."""
+
+        instance = cls((), renderer_version="filesystem-check")
+        manifest = instance._read_manifest(Path(vault))
+        instance.renderer_version = next(iter(manifest.values()), {}).get(
+            "renderer_version", "filesystem-check"
+        )
+        instance._files = {}
+        report = instance.check(Path(vault))
+        # In filesystem-only mode stale is explicit manifest state, not desired-minus-owned.
+        explicit = tuple(sorted(path for path, value in manifest.items() if value.get("stale") is True))
+        return CheckReport(
+            report.broken_links, report.creatable_user_notes, report.missing_source_ids,
+            report.manifest_mismatches, report.modified, report.unmarked_collisions, explicit,
+        )
+
+    @classmethod
+    def clean_stale(cls, vault: Path, *, dry_run: bool = False) -> ExportResult:
+        """Remove only explicitly stale, unmodified manifest-owned files."""
+
+        vault = Path(vault)
+        instance = cls((), renderer_version="filesystem-clean")
+        manifest = instance._read_manifest(vault)
+        stale = sorted(path for path, value in manifest.items() if value.get("stale") is True)
+        removed: list[str] = []
+        conflicts: list[str] = []
+        remaining = dict(manifest)
+        for relative in stale:
+            target = _target(vault, relative)
+            old = manifest[relative]
+            if not target.exists() or _fingerprint(target.read_bytes()) != old["fingerprint"]:
+                conflicts.append(relative)
+                continue
+            if not dry_run:
+                target.unlink()
+                remaining.pop(relative)
+                removed.append(relative)
+        if not dry_run and removed:
+            renderer = next(iter(remaining.values()), {}).get("renderer_version", "filesystem-clean")
+            instance.renderer_version = renderer
+            _atomic_write(vault / MANIFEST, instance._manifest_bytes(remaining))
+        return ExportResult(conflicts=tuple(conflicts), stale=tuple(stale), removed=tuple(removed))

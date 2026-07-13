@@ -17,6 +17,7 @@ _LEADING_MARKDOWN = re.compile(r"^(\s*)(#{1,6}\s|[-*+]\s|>\s?|\d+[.)]\s|---+$)")
 class LabelView:
     name: str
     normalized_name: str
+    path_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,7 @@ class ArticleView:
     collections: tuple[LabelView, ...] = ()
     manual_tags: tuple[LabelView, ...] = ()
     derivation: DerivationView | None = None
+    image_links: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -69,6 +71,13 @@ def stable_document_id(identity_key: str) -> str:
         raise ValueError("identity_key must be a non-empty string")
     digest = sha256(identity_key.encode("utf-8")).hexdigest()
     return f"document-{digest[:32]}"
+
+
+def stable_label_id(kind: str, normalized_name: str) -> str:
+    if not kind or not normalized_name:
+        raise ValueError("kind and normalized_name must be non-empty")
+    digest = sha256(f"{kind}\0{normalized_name}".encode("utf-8")).hexdigest()
+    return f"{kind}-{digest[:24]}"
 
 
 def _stable_id(value: object) -> str:
@@ -103,13 +112,13 @@ def _block(value: object) -> str:
     return "\n".join(lines)
 
 
-def _label(label: LabelView) -> tuple[str, str]:
-    return _stable_id(label.normalized_name), label.name
+def _label(label: LabelView) -> tuple[str, str, str]:
+    return label.normalized_name, _stable_id(label.path_id or label.normalized_name), label.name
 
 
-def _sorted_labels(labels: Sequence[LabelView]) -> list[tuple[str, str]]:
+def _sorted_labels(labels: Sequence[LabelView]) -> list[tuple[str, str, str]]:
     unique = {_label(label) for label in labels}
-    return sorted(unique, key=lambda item: (item[0], item[1].casefold(), item[1]))
+    return sorted(unique, key=lambda item: (item[0], item[2].casefold(), item[2], item[1]))
 
 
 def _wikilink(directory: str, identifier: str, label: str) -> str:
@@ -123,7 +132,7 @@ def _frontmatter(fields: Sequence[tuple[str, object]]) -> str:
 def _label_section(
     title: str, labels: Sequence[LabelView], directory: str
 ) -> str:
-    rendered = [f"- {_wikilink(directory, identifier, name)}" for identifier, name in _sorted_labels(labels)]
+    rendered = [f"- {_wikilink(directory, identifier, name)}" for _, identifier, name in _sorted_labels(labels)]
     return f"## {title}\n\n" + ("\n".join(rendered) if rendered else NOT_GENERATED)
 
 
@@ -134,7 +143,7 @@ def render_article(view: ArticleView) -> str:
     derivation = view.derivation
 
     collections = list(view.collections)
-    collection_ids = [identifier for identifier, _ in _sorted_labels(collections)]
+    collection_ids = [identifier for _, identifier, _ in _sorted_labels(collections)]
     fields = [
         ("id", document_id),
         ("source", view.source),
@@ -178,6 +187,7 @@ def render_article(view: ArticleView) -> str:
         _label_section("Topics", topics, "topics"),
         _label_section("Tags", [*ai_tags, *manual_tags], "tags"),
         _label_section("Collections", collections, "collections"),
+        "## Images\n\n" + ("\n".join(f"![]({_inline(link)})" for link in view.image_links) or NOT_GENERATED),
         f"## Source citations\n\n{citations}",
         (
             "## Source\n\n"
@@ -221,3 +231,7 @@ def render_topic_index(name: str, entries: Sequence[IndexEntryView]) -> str:
 
 def render_tag_index(name: str, entries: Sequence[IndexEntryView]) -> str:
     return _render_index("tag", name, entries)
+
+
+def render_collection_index(name: str, entries: Sequence[IndexEntryView]) -> str:
+    return _render_index("collection", name, entries)
