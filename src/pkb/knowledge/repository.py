@@ -12,6 +12,8 @@ from typing import Any
 from .migrations import migrate
 from .models import NormalizedDocument
 from .urls import canonicalize_url, platform_identity
+from .fingerprint import derivation_input_hash
+from pkb.review import DocumentNotFoundError, READING_STATUSES, ReadingState, normalize_tag
 
 
 class MergeConflictError(ValueError):
@@ -376,12 +378,23 @@ class KnowledgeRepository:
         )
 
     def set_reading_state(self, document_id: int, **values: Any) -> None:
+        aliases = {
+            "priority": "manual_priority", "reason": "priority_reason",
+            "last_reviewed": "last_reviewed_at", "user_note": "user_note_ref",
+        }
+        values = {aliases.get(key, key): value for key, value in values.items()}
         allowed = {"status", "manual_priority", "priority_reason", "last_reviewed_at", "user_note_ref"}
         unknown = set(values) - allowed
         if unknown:
             raise ValueError(f"unknown reading state fields: {sorted(unknown)}")
+        self._require_document(document_id)
         current = dict(self._state(document_id) or {})
         state = {"status": "unread", "manual_priority": None, "priority_reason": None, "last_reviewed_at": None, "user_note_ref": None, **current, **values}
+        if state["status"] not in READING_STATUSES:
+            raise ValueError(f"invalid reading status: {state['status']!r}")
+        priority = state["manual_priority"]
+        if priority is not None and (isinstance(priority, bool) or not isinstance(priority, int) or not 1 <= priority <= 5):
+            raise ValueError("priority must be null or an integer from 1 to 5")
         with self.connection:
             self.connection.execute("DELETE FROM reading_state WHERE document_id=?", (document_id,))
             self.connection.execute(
@@ -389,6 +402,121 @@ class KnowledgeRepository:
                    last_reviewed_at, user_note_ref) VALUES (?, ?, ?, ?, ?, ?)""",
                 (document_id, state["status"], state["manual_priority"], state["priority_reason"], state["last_reviewed_at"], state["user_note_ref"]),
             )
+
+    def get_reading_state(self, document_id: int) -> ReadingState | None:
+        row = self._state(document_id)
+        if row is None:
+            return None
+        return ReadingState(
+            int(row["document_id"]), row["status"], row["manual_priority"],
+            row["priority_reason"], row["last_reviewed_at"], row["user_note_ref"],
+        )
+
+    def set_user_tags(self, document_id: int, tags: list[str] | tuple[str, ...]) -> None:
+        self._require_document(document_id)
+        normalized = self._normalized_tags(tags)
+        with self.connection:
+            self.connection.execute(
+                "DELETE FROM document_tags WHERE document_id=? AND origin='user'", (document_id,)
+            )
+            for key, display in normalized:
+                tag_id = self._ensure_tag(key, display)
+                self.connection.execute(
+                    "INSERT INTO document_tags(document_id, tag_id, origin) VALUES (?, ?, 'user')",
+                    (document_id, tag_id),
+                )
+
+    def get_user_tags(self, document_id: int) -> tuple[str, ...]:
+        return tuple(row[0] for row in self.connection.execute(
+            """SELECT t.display_name FROM document_tags dt JOIN tags t ON t.id=dt.tag_id
+               WHERE dt.document_id=? AND dt.origin='user' ORDER BY t.normalized_name""",
+            (document_id,),
+        ))
+
+    def apply_ai_tags(
+        self, document_id: int, *, derivation_id: str, tags: list[tuple[str, float]] | tuple[tuple[str, float], ...]
+    ) -> None:
+        self._require_document(document_id)
+        prepared: dict[str, tuple[str, float]] = {}
+        for name, confidence in tags:
+            if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
+                raise ValueError("confidence must be between 0 and 1")
+            key, display = normalize_tag(name)
+            candidate = (display, float(confidence))
+            previous = prepared.get(key)
+            if previous is None or (-candidate[1], candidate[0]) < (-previous[1], previous[0]):
+                prepared[key] = candidate
+        derivation = self.connection.execute(
+            """SELECT d.*, doc.source_content_hash AS current_source_hash,
+                      doc.normalized_content_hash AS current_normalized_hash,
+                      doc.normalization_version AS current_normalization_version
+               FROM derivations d JOIN documents doc ON doc.id=d.document_id
+               WHERE d.id=?""",
+            (derivation_id,),
+        ).fetchone()
+        valid = derivation is not None and int(derivation["document_id"]) == document_id
+        valid = valid and derivation["kind"] == "article" and derivation["status"] == "accepted"
+        if valid:
+            expected = derivation_input_hash(
+                derivation["current_source_hash"], derivation["current_normalized_hash"],
+                derivation["current_normalization_version"],
+            )
+            valid = derivation["input_hash"] == expected
+        if not valid:
+            raise ValueError("derivation is not an accepted current article derivation for document")
+        with self.connection:
+            self.connection.execute(
+                "DELETE FROM document_tags WHERE document_id=? AND origin='ai'", (document_id,)
+            )
+            for key in sorted(prepared):
+                display, confidence = prepared[key]
+                tag_id = self._ensure_tag(key, display)
+                self.connection.execute(
+                    """INSERT INTO document_tags
+                       (document_id, tag_id, origin, confidence, derivation_id)
+                       VALUES (?, ?, 'ai', ?, ?)""",
+                    (document_id, tag_id, confidence, derivation_id),
+                )
+
+    def get_ai_tags(self, document_id: int) -> tuple[tuple[str, float], ...]:
+        document = self.document(document_id)
+        if document is None:
+            return ()
+        expected = derivation_input_hash(
+            document["source_content_hash"], document["normalized_content_hash"],
+            document["normalization_version"],
+        )
+        return tuple((row[0], float(row[1])) for row in self.connection.execute(
+            """SELECT t.display_name, dt.confidence FROM document_tags dt
+               JOIN tags t ON t.id=dt.tag_id JOIN derivations d ON d.id=dt.derivation_id
+               WHERE dt.document_id=? AND dt.origin='ai' AND d.document_id=?
+                 AND d.kind='article' AND d.status='accepted' AND d.input_hash=?
+               ORDER BY t.normalized_name""",
+            (document_id, document_id, expected),
+        ))
+
+    def _require_document(self, document_id: int) -> None:
+        if self.document(document_id) is None:
+            raise DocumentNotFoundError(f"document {document_id} does not exist")
+
+    @staticmethod
+    def _normalized_tags(tags: list[str] | tuple[str, ...]) -> tuple[tuple[str, str], ...]:
+        unique: dict[str, str] = {}
+        for value in tags:
+            key, display = normalize_tag(value)
+            previous = unique.get(key)
+            if previous is None or (display.casefold(), display) < (previous.casefold(), previous):
+                unique[key] = display
+        return tuple((key, unique[key]) for key in sorted(unique))
+
+    def _ensure_tag(self, normalized_name: str, display_name: str) -> int:
+        self.connection.execute(
+            "INSERT OR IGNORE INTO tags(normalized_name, display_name) VALUES (?, ?)",
+            (normalized_name, display_name),
+        )
+        return int(self.connection.execute(
+            "SELECT id FROM tags WHERE normalized_name=?", (normalized_name,)
+        ).fetchone()[0])
 
     def count_documents(self) -> int:
         return self.connection.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
