@@ -7,6 +7,10 @@ import re
 from hashlib import sha256
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pkb.review import DailyReviewItem
 
 
 NOT_GENERATED = "尚未生成"
@@ -235,3 +239,22 @@ def render_tag_index(name: str, entries: Sequence[IndexEntryView]) -> str:
 
 def render_collection_index(name: str, entries: Sequence[IndexEntryView]) -> str:
     return _render_index("collection", name, entries)
+
+
+def render_daily_review(date: str, items: Sequence["DailyReviewItem"]) -> str:
+    """Render a deterministic, generated daily review page."""
+
+    fields = (("date", date), ("generated_by", "pkb"), ("review_count", len(items)))
+    sections = [_frontmatter(fields), f"# Daily review — {_inline(date)}"]
+    if not items:
+        sections.append("No items are due for review.")
+    for index, item in enumerate(items, 1):
+        link = _wikilink("articles", item.stable_id, item.title)
+        sections.append(
+            f"## {index}. {link}\n\n"
+            f"- Topic: {_inline(item.primary_topic)}\n"
+            f"- Why review: {_inline(item.priority_reason)}\n"
+            f"- After reading: run `pkb review mark {item.stable_id} --status read --db <PATH>`\n"
+            "- Prompt: What changed in your understanding, and what action follows?"
+        )
+    return "\n\n".join(sections) + "\n"

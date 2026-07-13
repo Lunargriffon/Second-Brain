@@ -90,6 +90,9 @@ def main(argv: Sequence[str] | None = None, *, provider: DerivationProvider | No
     if args.command == "wiki":
         return _run_wiki(args)
 
+    if args.command == "review":
+        return _run_review(args)
+
     parser.error("unsupported command")
     return 2
 
@@ -109,6 +112,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_knowledge_parsers(subparsers)
     _add_derivation_parsers(subparsers)
     _add_wiki_parsers(subparsers)
+    _add_review_parsers(subparsers)
 
     zhihu_parser = export_subparsers.add_parser("zhihu")
     zhihu_parser.add_argument("--collection-url", required=True)
@@ -247,6 +251,21 @@ def _add_wiki_parsers(subparsers: argparse._SubParsersAction) -> None:
     clean.add_argument("--vault", required=True)
     clean.add_argument("--stale-only", action="store_true", required=True)
     clean.add_argument("--dry-run", action="store_true")
+
+
+def _add_review_parsers(subparsers: argparse._SubParsersAction) -> None:
+    review = subparsers.add_parser("review")
+    commands = review.add_subparsers(dest="review_command", required=True)
+    today = commands.add_parser("today")
+    today.add_argument("--db", required=True)
+    today.add_argument("--count", type=int, default=5)
+    today.add_argument("--date")
+    today.add_argument("--vault")
+    mark = commands.add_parser("mark")
+    mark.add_argument("document_id", metavar="DOCUMENT_ID")
+    mark.add_argument("--db", required=True)
+    mark.add_argument("--status", choices=("read", "queued", "ignored"), required=True)
+    mark.add_argument("--date")
 
 
 def _build_zhihu_client(args: argparse.Namespace) -> FakeZhihuClient | RealZhihuClient:
@@ -635,6 +654,53 @@ def _run_wiki(args: argparse.Namespace) -> int:
     result = VaultExporter.clean_stale(vault, dry_run=args.dry_run)
     print(f"stale={len(result.stale)} removed={len(result.removed)} conflicts={len(result.conflicts)} dry_run={str(args.dry_run).lower()}")
     return 1 if result.conflicts else 0
+
+
+def _run_review(args: argparse.Namespace) -> int:
+    from datetime import date as current_date
+
+    from pkb.review import DailyReviewService, DocumentNotFoundError
+    from pkb.wiki.exporter import GeneratedFile, VaultExporter
+    from pkb.wiki.projection import RENDERER_VERSION, build_generated_files
+    from pkb.wiki.renderer import render_daily_review
+
+    date_text = args.date or current_date.today().isoformat()
+    try:
+        with DailyReviewService(Path(args.db)) as service:
+            if args.review_command == "mark":
+                state = service.mark(args.document_id, status=args.status, date=date_text)
+                print(
+                    f"document_id={args.document_id} status={state.status} "
+                    f"last_reviewed={state.last_reviewed}"
+                )
+                return 0
+            items = service.select(date=date_text, count=args.count)
+    except (ValueError, DocumentNotFoundError) as exc:
+        print(str(exc), file=__import__("sys").stderr)
+        return 2
+
+    for item in items:
+        print(
+            f"{item.stable_id}\t{item.title}\ttopic={item.primary_topic}\t"
+            f"manual={item.manual_priority if item.manual_priority is not None else '-'}\t"
+            f"ai={item.ai_reading_priority}\tevergreen={item.evergreen_score}"
+        )
+    if args.vault:
+        relative = f"daily/{date_text}.md"
+        rendered = render_daily_review(date_text, items)
+        vault = Path(args.vault)
+        files = build_generated_files(Path(args.db), vault)
+        files.append(GeneratedFile(relative, rendered, f"daily-{date_text}"))
+        result = VaultExporter(
+            files,
+            renderer_version=RENDERER_VERSION,
+        ).export(vault)
+        if result.conflicts:
+            print(f"refused to overwrite non-generated or modified daily file: {relative}",
+                  file=__import__("sys").stderr)
+            return 1
+        print(f"vault={relative} items={len(items)}")
+    return 0
 
 
 def _build_derivation_provider(env_path: Path) -> DerivationProvider:
