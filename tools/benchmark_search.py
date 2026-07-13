@@ -172,7 +172,11 @@ def benchmark(*, raw_dir: str | Path, queries_path: str | Path, output_path: str
     queries_path = Path(queries_path)
     output_path = Path(output_path)
     documents = _load_corpus(raw_dir)
-    queries = json.loads(queries_path.read_text(encoding="utf-8"))
+    queries = [
+        item
+        for item in json.loads(queries_path.read_text(encoding="utf-8"))
+        if item.get("subset", "lexical") == "lexical"
+    ]
     digest = hashlib.sha256()
     for identity, title, content in sorted(documents):
         digest.update(json.dumps([identity, title, content], ensure_ascii=False).encode("utf-8"))
