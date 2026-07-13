@@ -181,6 +181,23 @@ def test_check_reports_desired_fingerprint_different_from_manifest(tmp_path):
     assert report.manifest_mismatches == ("articles/doc-1.md",)
 
 
+@pytest.mark.parametrize(
+    "article",
+    [
+        page("wrong-id"),
+        page("doc-1").replace('id: "doc-1"', 'id: "doc-1"\nid: "doc-1"'),
+    ],
+)
+def test_check_rejects_mismatched_or_duplicate_article_source_id(tmp_path, article):
+    exp = exporter(GeneratedFile("articles/doc-1.md", article, "doc-1"))
+    exp.export(tmp_path)
+
+    report = exp.check(tmp_path)
+
+    assert report.manifest_mismatches == ("articles/doc-1.md",)
+    assert not report.ok
+
+
 @pytest.mark.parametrize("unsafe", ["../escape.md", "/absolute.md", "user/../escape.md", ".pkb-generated.json"])
 def test_rejects_unsafe_generated_paths(tmp_path, unsafe):
     with pytest.raises(ValueError, match="unsafe|reserved"):

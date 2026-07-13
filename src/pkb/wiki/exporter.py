@@ -273,8 +273,14 @@ class VaultExporter:
                 modified.add(relative)
             if target.exists() and target.suffix.casefold() == ".md":
                 text = target.read_text(encoding="utf-8")
-                if not _SOURCE_ID.search(text) and PurePosixPath(relative).parts[0] == "articles":
-                    missing_ids.add(relative)
+                if PurePosixPath(relative).parts[0] == "articles":
+                    sections = text.split("---", 2)
+                    frontmatter = sections[1] if len(sections) == 3 else ""
+                    source_ids = _SOURCE_ID.findall(frontmatter)
+                    if not source_ids:
+                        missing_ids.add(relative)
+                    elif len(source_ids) != 1 or source_ids[0] != old["document_id"]:
+                        mismatches.add(relative)
 
         for relative, item in self._files.items():
             target = _target(vault, relative)
