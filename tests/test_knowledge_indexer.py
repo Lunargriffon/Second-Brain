@@ -165,8 +165,13 @@ def test_source_edit_queues_one_new_job_and_preserves_old_derivation(
     assert changed.derivation_jobs_queued == 1
     assert repository.connection.execute("SELECT 1 FROM derivations WHERE id='old'").fetchone()
     current = repository.document(document_id)
+    from pkb.derive.workflows import derivation_input_hash
     pending = repository.connection.execute(
-        "SELECT * FROM jobs WHERE document_id=? AND input_hash=?", (document_id, current["source_content_hash"])
+        "SELECT * FROM jobs WHERE document_id=? AND input_hash=?",
+        (document_id, derivation_input_hash(
+            current["source_content_hash"], current["normalized_content_hash"],
+            current["normalization_version"],
+        )),
     ).fetchall()
     assert len(pending) == 1
     assert pending[0]["pipeline_version"] == "article-v1"

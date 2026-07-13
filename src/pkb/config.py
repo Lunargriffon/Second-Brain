@@ -17,7 +17,7 @@ class Config:
 
 
 def load_config(env_path: Path = Path(".env")) -> Config:
-    values = _read_env_file(env_path)
+    values = read_env_file(env_path)
     cookie = values.get("ZHIHU_COOKIE", "").strip()
     if not cookie:
         raise ConfigError("ZHIHU_COOKIE is required")
@@ -30,7 +30,7 @@ def load_config(env_path: Path = Path(".env")) -> Config:
     )
 
 
-def _read_env_file(env_path: Path) -> dict[str, str]:
+def read_env_file(env_path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     if not env_path.exists():
         return values
@@ -42,6 +42,10 @@ def _read_env_file(env_path: Path) -> dict[str, str]:
         key, value = line.split("=", 1)
         values[key.strip()] = value.strip()
     return values
+
+
+# Backward-compatible private alias for callers predating the public helper.
+_read_env_file = read_env_file
 
 
 def _parse_bool(value: str) -> bool:

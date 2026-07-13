@@ -13,6 +13,7 @@ from pkb.sources.x_bookmarks import XBookmarkAdapter
 from pkb.sources.zhihu import ZhihuAdapter
 
 from .fingerprint import normalized_content_hash, source_content_hash
+from pkb.derive.workflows import derivation_input_hash
 from .reports import IndexError, IndexReport
 from .repository import KnowledgeRepository
 from .search import SearchIndex
@@ -135,7 +136,9 @@ class KnowledgeIndexer:
                         if outcome.created or outcome.source_changed:
                             if self.repository.enqueue_derivation_job(
                                 outcome.document_id,
-                                input_hash=source_hash,
+                                input_hash=derivation_input_hash(
+                                    source_hash, normalized_hash, self.normalization_version
+                                ),
                                 pipeline_version=self.pipeline_version,
                                 commit=not strict,
                             ):

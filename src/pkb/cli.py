@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from dataclasses import asdict
 from pathlib import Path
 from typing import Sequence
+
+from pkb.derive.provider import DerivationProvider
 
 from pkb.audit import AuditResult, audit_zhihu_collection
 from pkb.config import ConfigError, load_config
@@ -19,7 +22,7 @@ from pkb.verify import verify_zhihu_exports
 from pkb.zhihu import FakeZhihuClient, RealZhihuClient, ZhihuClientError
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None, *, provider: DerivationProvider | None = None) -> int:
     parser = _build_parser()
     try:
         args = parser.parse_args(argv)
@@ -81,6 +84,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "search":
         return _run_knowledge_search(args)
 
+    if args.command == "derive":
+        return _run_derivation(args, provider)
+
     parser.error("unsupported command")
     return 2
 
@@ -98,6 +104,7 @@ def _build_parser() -> argparse.ArgumentParser:
     images_parser = subparsers.add_parser("images")
     images_subparsers = images_parser.add_subparsers(dest="source", required=True)
     _add_knowledge_parsers(subparsers)
+    _add_derivation_parsers(subparsers)
 
     zhihu_parser = export_subparsers.add_parser("zhihu")
     zhihu_parser.add_argument("--collection-url", required=True)
@@ -190,6 +197,35 @@ def _add_knowledge_parsers(subparsers: argparse._SubParsersAction) -> None:
     search_parser.add_argument("--collection")
     search_parser.add_argument("--limit", type=int, default=10)
     search_parser.add_argument("--format", choices=("text", "json"), default="text")
+
+
+def _bounded(parser: argparse.ArgumentParser, *, dry_run: bool = False) -> None:
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument("--limit", type=int, default=None)
+    scope.add_argument("--unlimited", action="store_true")
+    if dry_run:
+        parser.add_argument("--dry-run", action="store_true")
+
+
+def _add_derivation_parsers(subparsers: argparse._SubParsersAction) -> None:
+    derive = subparsers.add_parser("derive")
+    commands = derive.add_subparsers(dest="derive_command", required=True)
+    articles = commands.add_parser("articles")
+    articles.add_argument("--db", required=True)
+    articles.add_argument("--env", default=".env")
+    articles.add_argument("--report", default="data/derived/runs.jsonl")
+    _bounded(articles, dry_run=True)
+    status = commands.add_parser("status")
+    status.add_argument("--db", required=True)
+    status.add_argument("--format", choices=("text", "json"), default="text")
+    retry = commands.add_parser("retry")
+    retry.add_argument("--db", required=True)
+    retry.add_argument("--status", choices=("failed",), required=True)
+    _bounded(retry)
+    migrate_parser = commands.add_parser("migrate")
+    migrate_parser.add_argument("--db", required=True)
+    migrate_parser.add_argument("--normalization-version", type=int, required=True)
+    _bounded(migrate_parser, dry_run=True)
 
 
 def _build_zhihu_client(args: argparse.Namespace) -> FakeZhihuClient | RealZhihuClient:
@@ -468,6 +504,101 @@ def _run_knowledge_search(args: argparse.Namespace) -> int:
         for result in results:
             print(f"{result.document_id}\t{result.title}\t{result.url}\n{result.snippet}")
     return 0
+
+
+def _effective_limit(args: argparse.Namespace, *, default: int = 10) -> int | None:
+    if args.unlimited:
+        return None
+    limit = args.limit if args.limit is not None else default
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+    return limit
+
+
+def _run_derivation(args: argparse.Namespace, provider: DerivationProvider | None) -> int:
+    from pkb.derive.pipeline import DerivationPipeline
+    from pkb.derive.prompts import ARTICLE_PROMPT_VERSION
+    from pkb.derive.workflows import (
+        article_scope,
+        job_status,
+        migration_candidates,
+        queue_migration,
+        retry_failed,
+    )
+
+    if args.derive_command == "status":
+        status = job_status(Path(args.db))
+        if args.format == "json":
+            print(json.dumps(status, sort_keys=True))
+        else:
+            print(" ".join(f"{key}={value}" for key, value in status.items()))
+        return 0
+    try:
+        limit = _effective_limit(args)
+    except ValueError as exc:
+        print(str(exc), file=__import__("sys").stderr)
+        return 2
+
+    if args.derive_command == "retry":
+        # An unbounded retry still has an explicitly inspected finite database scope.
+        retry_limit = limit if limit is not None else 2**63 - 1
+        count = retry_failed(Path(args.db), retry_limit)
+        print(f"retried={count}")
+        return 0
+
+    if args.derive_command == "migrate":
+        if args.normalization_version <= 0:
+            print("normalization version must be positive", file=__import__("sys").stderr)
+            return 2
+        candidates = migration_candidates(Path(args.db), args.normalization_version, limit)
+        if args.dry_run:
+            print(f"would_queue={len(candidates)} normalization_version={args.normalization_version}")
+            return 0
+        queued = queue_migration(Path(args.db), args.normalization_version, limit)
+        print(f"queued={queued} normalization_version={args.normalization_version}")
+        return 0
+
+    try:
+        provider = provider or _build_derivation_provider(Path(args.env))
+    except (ConfigError, ValueError):
+        print("Derivation provider configuration is missing or invalid.", file=__import__("sys").stderr)
+        return 1
+    scope = article_scope(Path(args.db), limit)
+    print(
+        f"documents={scope.documents} model={provider.model_name} "
+        f"prompt_version={ARTICLE_PROMPT_VERSION} "
+        f"estimated_input_chars={scope.estimated_input_chars}"
+    )
+    if args.dry_run or scope.documents == 0:
+        return 0
+    result = DerivationPipeline(
+        Path(args.db), provider, run_log=Path(args.report)
+    ).run(limit=scope.documents)
+    print(
+        f"processed={result.processed} succeeded={result.succeeded} "
+        f"failed={result.failed} stopped={str(result.stopped).lower()}"
+    )
+    return 1 if result.stopped else 0
+
+
+def _build_derivation_provider(env_path: Path) -> DerivationProvider:
+    from pkb.config import read_env_file
+    from pkb.derive.provider import OpenAICompatibleProvider
+
+    values = {**read_env_file(env_path), **os.environ}
+    base_url = values.get("PKB_LLM_BASE_URL", "").strip()
+    api_key = values.get("PKB_LLM_API_KEY", "").strip()
+    model = values.get("PKB_LLM_MODEL", "").strip()
+    if not (base_url and api_key and model):
+        raise ConfigError(
+            "PKB_LLM_BASE_URL, PKB_LLM_API_KEY, and PKB_LLM_MODEL are required"
+        )
+    return OpenAICompatibleProvider(
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        timeout_seconds=float(values.get("PKB_LLM_TIMEOUT", "60")),
+    )
 
 
 def _default_image_state_path(raw_path: Path, state_dir: Path) -> Path:
