@@ -71,7 +71,7 @@ def test_sensevoice_is_lazy_and_preserves_metadata_and_segments():
         created.append(kwargs)
         return Model()
 
-    engine = SenseVoiceEngine(model_factory=factory)
+    engine = SenseVoiceEngine(model_factory=factory, postprocessor=lambda text: text)
     assert created == []
     got = engine.transcribe(Path("speech.wav"))
     assert created == [{"model": "iic/SenseVoiceSmall", "device": "cpu"}]
@@ -82,6 +82,30 @@ def test_sensevoice_is_lazy_and_preserves_metadata_and_segments():
         TranscriptSegment(0.0, 1.25, "First."),
         TranscriptSegment(1.25, 2.5, "Second."),
     )
+
+
+def test_sensevoice_postprocesses_tagged_transcript_and_segment_text():
+    tagged = "<|zh|><|NEUTRAL|><|Speech|>hello"
+
+    class Model:
+        def generate(self, **kwargs):
+            return [{
+                "text": tagged,
+                "sentence_info": [{"start": 0, "end": 1000, "text": tagged}],
+            }]
+
+    calls = []
+
+    def postprocess(text):
+        calls.append(text)
+        return "hello"
+
+    engine = SenseVoiceEngine(model_factory=lambda **_: Model(), postprocessor=postprocess)
+    got = engine.transcribe(Path("speech.wav"))
+
+    assert got.text == "hello"
+    assert got.segments == (TranscriptSegment(0.0, 1.0, "hello"),)
+    assert calls == [tagged, tagged]
 
 
 def test_faster_whisper_is_lazy_and_defaults_to_cpu_int8():

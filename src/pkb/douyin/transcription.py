@@ -58,11 +58,13 @@ class SenseVoiceEngine:
         *,
         device: str = "cpu",
         model_factory: Callable[..., Any] | None = None,
+        postprocessor: Callable[[str], str] | None = None,
     ) -> None:
         self.model_name = model
         self.device = device
         self._model_factory = model_factory
         self._model: Any | None = None
+        self._postprocessor = postprocessor
 
     def _load_model(self) -> Any:
         if self._model is None:
@@ -74,15 +76,23 @@ class SenseVoiceEngine:
             self._model = factory(model=self.model_name, device=self.device)
         return self._model
 
+    def _load_postprocessor(self) -> Callable[[str], str]:
+        if self._postprocessor is None:
+            from funasr.utils.postprocess_utils import rich_transcription_postprocess
+
+            self._postprocessor = rich_transcription_postprocess
+        return self._postprocessor
+
     def transcribe(self, audio_path: Path) -> TranscriptResult:
         generated = self._load_model().generate(input=str(audio_path))
         entry = generated[0] if generated else {}
-        text = str(entry.get("text", "")).strip()
+        postprocess = self._load_postprocessor()
+        text = postprocess(str(entry.get("text", ""))).strip()
         segments = tuple(
             TranscriptSegment(
                 start=float(segment["start"]) / 1000.0,
                 end=float(segment["end"]) / 1000.0,
-                text=str(segment.get("text", "")).strip(),
+                text=postprocess(str(segment.get("text", ""))).strip(),
             )
             for segment in entry.get("sentence_info", ())
         )
