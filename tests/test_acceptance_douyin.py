@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import shutil
 import subprocess
 
 from pkb.douyin.manifest import ManifestStore
@@ -102,15 +103,13 @@ def test_live_audit_is_replaced_atomically_without_private_details(tmp_path):
 
 
 def test_browser_stops_pagination_when_scroll_reveals_no_new_favorites():
-    payload = json.dumps({
-        "items": [{"aweme_id": "7", "share_url": "https://www.douyin.com/video/7"}],
-        "cursor": "1", "has_more": True,
-    })
+    payload = json.dumps({"entries": [{"attrs": {"href": "https://www.douyin.com/video/7"}}]})
 
     def runner(command, **_kwargs):
-        output = "" if "open" in command else payload
+        output = json.dumps({"logged_in": True}) if "whoami" in command else ("" if "open" in command else payload)
         return subprocess.CompletedProcess(command, 0, output, "")
 
     browser = OpenCliFavoritesBrowser(runner=runner)
+    assert browser.executable == (shutil.which("opencli") or "opencli")
     assert browser.page(None).cursor == "1"
     assert browser.page("1").cursor is None

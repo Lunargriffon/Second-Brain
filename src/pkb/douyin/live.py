@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import datetime, timezone
 import json
 from pathlib import Path
+import shutil
 import subprocess
 from typing import Any, Callable, Mapping
 
@@ -35,41 +37,56 @@ class OpenCliFavoritesBrowser:
     def __init__(self, *, runner: Runner = subprocess.run, session: str = "pkb-douyin") -> None:
         self.runner = runner
         self.session = session
+        self.executable = shutil.which("opencli") or "opencli"
         self.opened = False
         self.last_count = -1
 
     def page(self, cursor: str | None) -> FavoritePage:
         if not self.opened:
-            self._run(["opencli", "browser", self.session, "open", self.FAVORITES_URL])
+            auth = self._run([self.executable, "douyin", "whoami", "-f", "json"])
+            try:
+                identity = json.loads(auth.stdout)
+            except json.JSONDecodeError:
+                raise CollectionStopped("browser_unavailable") from None
+            if not isinstance(identity, Mapping) or identity.get("logged_in") is not True:
+                raise CollectionStopped("auth_required")
+            self._run([self.executable, "browser", self.session, "open", self.FAVORITES_URL])
             self.opened = True
         elif cursor is not None:
-            self._run(["opencli", "browser", self.session, "eval", "window.scrollTo(0,document.body.scrollHeight); true"])
+            self._run([self.executable, "browser", self.session, "eval", "window.scrollTo(0,document.body.scrollHeight); true"])
 
-        script = r"""(() => {
-const body=(document.body?.innerText||'').toLowerCase();
-if (/验证码|captcha|安全验证/.test(body)) return {error:'captcha_required'};
-if (/登录后|立即登录|扫码登录/.test(body)) return {error:'login_required'};
-const seen=new Set(), items=[];
-for (const a of document.querySelectorAll('a[href*="/video/"]')) {
-  const m=a.href.match(/\/video\/(\d+)/); if (!m || seen.has(m[1])) continue;
-  seen.add(m[1]);
-  const text=(a.innerText||a.getAttribute('aria-label')||'').trim();
-  items.push({aweme_id:m[1],share_url:a.href.split('?')[0],desc:text,
-    author:{uid:'unknown',nickname:''},text_extra:[]});
-}
-return {items, cursor:String(items.length), has_more:items.length>0,
- observed_at:new Date().toISOString()};
-})()"""
-        completed = self._run(["opencli", "browser", self.session, "eval", script])
+        completed = self._run([
+            self.executable, "browser", self.session, "find",
+            "--css", "a", "--limit", "500", "--text-max", "0",
+        ])
         try:
             value = json.loads(completed.stdout)
-            if isinstance(value, Mapping) and "result" in value and isinstance(value["result"], Mapping):
-                value = value["result"]
             if not isinstance(value, Mapping):
                 raise ValueError
         except (json.JSONDecodeError, ValueError, TypeError):
             raise CollectionStopped("browser_unavailable") from None
-        page = FavoritePage.from_result(value)
+        raw_items = []
+        for entry in value.get("entries", []):
+            if not isinstance(entry, Mapping):
+                continue
+            attrs = entry.get("attrs")
+            link = attrs.get("href") if isinstance(attrs, Mapping) else None
+            if not isinstance(link, str) or "/video/" not in link:
+                continue
+            work_id = link.split("/video/", 1)[1].split("?", 1)[0].split("/", 1)[0]
+            if work_id.isdigit():
+                raw_items.append({
+                    "aweme_id": work_id,
+                    "share_url": f"https://www.douyin.com/video/{work_id}",
+                    "author": {"uid": "unknown", "nickname": ""},
+                })
+        normalized = {
+            "items": raw_items,
+            "cursor": str(len(raw_items)),
+            "has_more": bool(raw_items),
+            "observed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        }
+        page = FavoritePage.from_result(normalized)
         current_count = len(page.items)
         if cursor is not None and current_count <= self.last_count:
             page = FavoritePage(page.items, None, page.observed_at)
@@ -78,7 +95,14 @@ return {items, cursor:String(items.length), has_more:items.length>0,
 
     def _run(self, command: list[str]) -> subprocess.CompletedProcess[str]:
         try:
-            return self.runner(command, check=True, capture_output=True, text=True)
+            return self.runner(
+                command,
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
         except (FileNotFoundError, subprocess.CalledProcessError) as exc:
             stderr = str(getattr(exc, "stderr", "")).lower()
             if "429" in stderr:
