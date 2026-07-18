@@ -19,6 +19,10 @@ search = [
 mcp = [
   "mcp>=1.0",
 ]
+douyin = [
+  "funasr>=1.2",
+  "faster-whisper>=1.1",
+]
 
 [project.scripts]
 pkb = "pkb.cli:main"
