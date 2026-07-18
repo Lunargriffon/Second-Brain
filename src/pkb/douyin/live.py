@@ -164,10 +164,11 @@ def run_live_trial(
         raise ValueError("request delay must be 5..10 seconds")
     manifest = ManifestStore(state)
     try:
-        discovered = FavoritesCollector(
-            OpenCliFavoritesBrowser(), request_delay=request_delay
-        ).collect(limit=limit)
-        manifest.discover(discovered)
+        if not manifest.items():
+            discovered = FavoritesCollector(
+                OpenCliFavoritesBrowser(), request_delay=request_delay
+            ).collect(limit=limit)
+            manifest.discover(discovered)
         pipeline = DouyinPipeline(
             manifest=manifest,
             raw_store=DurableJsonlStore(output),

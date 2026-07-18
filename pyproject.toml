@@ -22,6 +22,8 @@ mcp = [
 douyin = [
   "funasr>=1.2",
   "faster-whisper>=1.1",
+  "torch>=2.0",
+  "torchaudio>=2.0",
 ]
 
 [project.scripts]
