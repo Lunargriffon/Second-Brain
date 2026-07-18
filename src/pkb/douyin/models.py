@@ -1,0 +1,189 @@
+"""Immutable domain models for the Douyin ingestion pipeline."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+from datetime import datetime
+from enum import Enum
+import math
+from typing import Any, Mapping
+from urllib.parse import urlparse
+
+
+class Stage(str, Enum):
+    DISCOVERED = "discovered"
+    ACQUIRED = "acquired"
+    AUDIO_READY = "audio_ready"
+    TRANSCRIBED = "transcribed"
+    PERSISTED = "persisted"
+    INDEXED = "indexed"
+    CLEANED = "cleaned"
+    FAILED = "failed"
+    UNAVAILABLE = "unavailable"
+
+
+_NEXT: dict[Stage, set[Stage]] = {
+    Stage.DISCOVERED: {Stage.ACQUIRED, Stage.UNAVAILABLE, Stage.FAILED},
+    Stage.ACQUIRED: {Stage.AUDIO_READY, Stage.FAILED},
+    Stage.AUDIO_READY: {Stage.TRANSCRIBED, Stage.FAILED},
+    Stage.TRANSCRIBED: {Stage.PERSISTED, Stage.FAILED},
+    Stage.PERSISTED: {Stage.INDEXED, Stage.CLEANED},
+    Stage.INDEXED: {Stage.CLEANED},
+    Stage.FAILED: {Stage.DISCOVERED},
+    Stage.CLEANED: set(),
+    Stage.UNAVAILABLE: set(),
+}
+
+
+def _validate_id(value: str, field_name: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must not be empty")
+
+
+def _validate_https_url(value: str) -> None:
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise ValueError("url must be an absolute HTTPS URL")
+
+
+def _validate_timestamp(value: str | None, field_name: str) -> None:
+    if value is None:
+        return
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be an ISO 8601 timestamp") from exc
+
+
+@dataclass(frozen=True)
+class TranscriptSegment:
+    start: float
+    end: float
+    text: str
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.start) or self.start < 0:
+            raise ValueError("start must be a finite non-negative number")
+        if not math.isfinite(self.end) or self.end < self.start:
+            raise ValueError("end must be finite and not precede start")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"start": self.start, "end": self.end, "text": self.text}
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> TranscriptSegment:
+        return cls(start=float(value["start"]), end=float(value["end"]), text=str(value["text"]))
+
+
+@dataclass(frozen=True)
+class FavoriteItem:
+    work_id: str
+    url: str
+    author_id: str
+    author: str
+    caption: str
+    hashtags: tuple[str, ...]
+    published_at: str | None
+    observed_at: str
+    stage: Stage = Stage.DISCOVERED
+
+    def __post_init__(self) -> None:
+        _validate_id(self.work_id, "work_id")
+        _validate_id(self.author_id, "author_id")
+        _validate_https_url(self.url)
+        _validate_timestamp(self.published_at, "published_at")
+        _validate_timestamp(self.observed_at, "observed_at")
+
+    def transition(self, target: Stage) -> FavoriteItem:
+        target = Stage(target)
+        if target not in _NEXT[self.stage]:
+            raise ValueError(f"illegal stage transition: {self.stage.value} -> {target.value}")
+        return replace(self, stage=target)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "work_id": self.work_id,
+            "url": self.url,
+            "author_id": self.author_id,
+            "author": self.author,
+            "caption": self.caption,
+            "hashtags": list(self.hashtags),
+            "published_at": self.published_at,
+            "observed_at": self.observed_at,
+            "stage": self.stage.value,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> FavoriteItem:
+        return cls(
+            work_id=str(value["work_id"]),
+            url=str(value["url"]),
+            author_id=str(value["author_id"]),
+            author=str(value["author"]),
+            caption=str(value["caption"]),
+            hashtags=tuple(str(tag) for tag in value.get("hashtags", ())),
+            published_at=value.get("published_at"),
+            observed_at=str(value["observed_at"]),
+            stage=Stage(value.get("stage", Stage.DISCOVERED.value)),
+        )
+
+
+@dataclass(frozen=True)
+class DouyinRawRecord:
+    work_id: str
+    url: str
+    author_id: str
+    author: str
+    caption: str
+    hashtags: tuple[str, ...]
+    published_at: str | None
+    observed_at: str
+    transcript: str
+    segments: tuple[TranscriptSegment, ...]
+    engine: str
+    model: str
+    language: str | None
+
+    def __post_init__(self) -> None:
+        _validate_id(self.work_id, "work_id")
+        _validate_id(self.author_id, "author_id")
+        _validate_https_url(self.url)
+        _validate_timestamp(self.published_at, "published_at")
+        _validate_timestamp(self.observed_at, "observed_at")
+        if any(current.start < previous.end for previous, current in zip(self.segments, self.segments[1:])):
+            raise ValueError("segment order must be chronological and non-overlapping")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "work_id": self.work_id,
+            "url": self.url,
+            "author_id": self.author_id,
+            "author": self.author,
+            "caption": self.caption,
+            "hashtags": list(self.hashtags),
+            "published_at": self.published_at,
+            "observed_at": self.observed_at,
+            "transcript": self.transcript,
+            "segments": [segment.to_dict() for segment in self.segments],
+            "engine": self.engine,
+            "model": self.model,
+            "language": self.language,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> DouyinRawRecord:
+        return cls(
+            work_id=str(value["work_id"]),
+            url=str(value["url"]),
+            author_id=str(value["author_id"]),
+            author=str(value["author"]),
+            caption=str(value["caption"]),
+            hashtags=tuple(str(tag) for tag in value.get("hashtags", ())),
+            published_at=value.get("published_at"),
+            observed_at=str(value["observed_at"]),
+            transcript=str(value["transcript"]),
+            segments=tuple(TranscriptSegment.from_dict(segment) for segment in value.get("segments", ())),
+            engine=str(value["engine"]),
+            model=str(value["model"]),
+            language=None if value.get("language") is None else str(value["language"]),
+        )
