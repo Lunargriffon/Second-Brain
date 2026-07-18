@@ -31,19 +31,29 @@ def _content(record: Mapping[str, object]) -> str:
         rendered = " ".join(f"#{tag}" for tag in hashtags if isinstance(tag, str) and tag)
         if rendered:
             parts.append(rendered)
+    rendered_segments: list[str] = []
     segments = record.get("transcript_segments")
     if isinstance(segments, list):
-        rendered_segments = []
         for segment in segments:
             if not isinstance(segment, Mapping):
                 continue
             text = _text(segment.get("text"))
-            stamp = _timestamp(segment.get("start"))
-            if text and stamp:
-                rendered_segments.append(f"[{stamp}] {text}")
+            start = segment.get("start")
+            end = segment.get("end")
+            start_stamp = _timestamp(start)
+            end_stamp = _timestamp(end)
+            ordered = (
+                isinstance(start, (int, float))
+                and not isinstance(start, bool)
+                and isinstance(end, (int, float))
+                and not isinstance(end, bool)
+                and end >= start
+            )
+            if text and start_stamp and end_stamp and ordered:
+                rendered_segments.append(f"{start_stamp}-{end_stamp} {text}")
         if rendered_segments:
             parts.append("\n".join(rendered_segments))
-    if not segments:
+    if not rendered_segments:
         transcript = _text(record.get("transcript_text"))
         if transcript:
             parts.append(transcript)

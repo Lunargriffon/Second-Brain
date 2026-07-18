@@ -123,8 +123,22 @@ def test_douyin_adapter_builds_searchable_text_without_media_references():
     assert doc.membership.collection_id == "favorites"
     assert doc.title == "如何建立长期记忆"
     assert "#学习方法 #长期记忆" in doc.plain_content
-    assert "[00:00] 间隔重复能够对抗遗忘曲线" in doc.plain_content
-    assert "[00:02] 主动回忆也很重要" in doc.plain_content
+    assert "00:00-00:02 间隔重复能够对抗遗忘曲线" in doc.plain_content
+    assert "00:02-00:04 主动回忆也很重要" in doc.plain_content
     assert doc.media_urls == ()
     assert "private.example" not in doc.plain_content
     assert "C:/private" not in doc.plain_content
+
+
+def test_douyin_adapter_falls_back_to_full_transcript_when_segments_are_invalid():
+    record = _record("douyin-favorites.jsonl")
+    record["transcript_segments"] = [
+        {"start": "invalid", "end": 2.0, "text": "ignored"},
+        {"start": 0.0, "end": 1.0, "text": ["not", "text"]},
+    ]
+
+    doc = DouyinFavoritesAdapter().normalize(
+        record, raw_path=Path("douyin-favorites.jsonl"), raw_line=1
+    )
+
+    assert "间隔重复能够对抗遗忘曲线" in doc.plain_content
