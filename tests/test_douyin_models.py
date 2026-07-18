@@ -59,17 +59,38 @@ def test_raw_record_round_trips_without_local_media_paths():
         hashtags=("知识",),
         published_at=None,
         observed_at="2026-07-18T00:00:00Z",
-        transcript="这是口述知识",
-        segments=(TranscriptSegment(0.0, 4.0, "这是口述知识"),),
-        engine="sensevoice",
-        model="SenseVoiceSmall",
+        transcript_text="这是口述知识",
+        transcript_segments=(TranscriptSegment(0.0, 4.0, "这是口述知识"),),
+        transcription_engine="sensevoice",
+        transcription_model="SenseVoiceSmall",
         language="zh",
+        source_duration_seconds=4.0,
+        content_fingerprint="sha256:abc",
+        status="persisted",
     )
 
     serialized = record.to_dict()
 
     assert DouyinRawRecord.from_dict(serialized) == record
     assert not any("path" in key or "media" in key for key in serialized)
+    assert set(serialized) == {
+        "work_id",
+        "url",
+        "author_id",
+        "author",
+        "caption",
+        "hashtags",
+        "published_at",
+        "observed_at",
+        "transcript_text",
+        "transcript_segments",
+        "transcription_engine",
+        "transcription_model",
+        "language",
+        "source_duration_seconds",
+        "content_fingerprint",
+        "status",
+    }
 
 
 def test_raw_record_rejects_out_of_order_segments():
@@ -83,12 +104,45 @@ def test_raw_record_rejects_out_of_order_segments():
             hashtags=(),
             published_at=None,
             observed_at="2026-07-18T00:00:00Z",
-            transcript="bad order",
-            segments=(
+            transcript_text="bad order",
+            transcript_segments=(
                 TranscriptSegment(5.0, 6.0, "later"),
                 TranscriptSegment(1.0, 2.0, "earlier"),
             ),
-            engine="sensevoice",
-            model="SenseVoiceSmall",
+            transcription_engine="sensevoice",
+            transcription_model="SenseVoiceSmall",
             language="zh",
+            source_duration_seconds=6.0,
+            content_fingerprint="sha256:abc",
+            status="persisted",
+        )
+
+
+@pytest.mark.parametrize(
+    ("duration", "fingerprint", "status", "message"),
+    [
+        (-1.0, "sha256:abc", "persisted", "source_duration_seconds"),
+        (1.0, "", "persisted", "content_fingerprint"),
+        (1.0, "sha256:abc", "", "status"),
+    ],
+)
+def test_raw_record_validates_persistence_metadata(duration, fingerprint, status, message):
+    with pytest.raises(ValueError, match=message):
+        DouyinRawRecord(
+            work_id="7",
+            url="https://www.douyin.com/video/7",
+            author_id="u1",
+            author="作者",
+            caption="内容",
+            hashtags=(),
+            published_at=None,
+            observed_at="2026-07-18T00:00:00Z",
+            transcript_text="知识",
+            transcript_segments=(TranscriptSegment(0.0, 1.0, "知识"),),
+            transcription_engine="sensevoice",
+            transcription_model="SenseVoiceSmall",
+            language="zh",
+            source_duration_seconds=duration,
+            content_fingerprint=fingerprint,
+            status=status,
         )

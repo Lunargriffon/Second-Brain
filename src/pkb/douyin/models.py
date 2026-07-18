@@ -138,11 +138,14 @@ class DouyinRawRecord:
     hashtags: tuple[str, ...]
     published_at: str | None
     observed_at: str
-    transcript: str
-    segments: tuple[TranscriptSegment, ...]
-    engine: str
-    model: str
+    transcript_text: str
+    transcript_segments: tuple[TranscriptSegment, ...]
+    transcription_engine: str
+    transcription_model: str
     language: str | None
+    source_duration_seconds: float
+    content_fingerprint: str
+    status: str
 
     def __post_init__(self) -> None:
         _validate_id(self.work_id, "work_id")
@@ -150,8 +153,15 @@ class DouyinRawRecord:
         _validate_https_url(self.url)
         _validate_timestamp(self.published_at, "published_at")
         _validate_timestamp(self.observed_at, "observed_at")
-        if any(current.start < previous.end for previous, current in zip(self.segments, self.segments[1:])):
+        if any(
+            current.start < previous.end
+            for previous, current in zip(self.transcript_segments, self.transcript_segments[1:])
+        ):
             raise ValueError("segment order must be chronological and non-overlapping")
+        if not math.isfinite(self.source_duration_seconds) or self.source_duration_seconds < 0:
+            raise ValueError("source_duration_seconds must be finite and non-negative")
+        _validate_id(self.content_fingerprint, "content_fingerprint")
+        _validate_id(self.status, "status")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -163,11 +173,14 @@ class DouyinRawRecord:
             "hashtags": list(self.hashtags),
             "published_at": self.published_at,
             "observed_at": self.observed_at,
-            "transcript": self.transcript,
-            "segments": [segment.to_dict() for segment in self.segments],
-            "engine": self.engine,
-            "model": self.model,
+            "transcript_text": self.transcript_text,
+            "transcript_segments": [segment.to_dict() for segment in self.transcript_segments],
+            "transcription_engine": self.transcription_engine,
+            "transcription_model": self.transcription_model,
             "language": self.language,
+            "source_duration_seconds": self.source_duration_seconds,
+            "content_fingerprint": self.content_fingerprint,
+            "status": self.status,
         }
 
     @classmethod
@@ -181,9 +194,14 @@ class DouyinRawRecord:
             hashtags=tuple(str(tag) for tag in value.get("hashtags", ())),
             published_at=value.get("published_at"),
             observed_at=str(value["observed_at"]),
-            transcript=str(value["transcript"]),
-            segments=tuple(TranscriptSegment.from_dict(segment) for segment in value.get("segments", ())),
-            engine=str(value["engine"]),
-            model=str(value["model"]),
+            transcript_text=str(value["transcript_text"]),
+            transcript_segments=tuple(
+                TranscriptSegment.from_dict(segment) for segment in value.get("transcript_segments", ())
+            ),
+            transcription_engine=str(value["transcription_engine"]),
+            transcription_model=str(value["transcription_model"]),
             language=None if value.get("language") is None else str(value["language"]),
+            source_duration_seconds=float(value["source_duration_seconds"]),
+            content_fingerprint=str(value["content_fingerprint"]),
+            status=str(value["status"]),
         )
