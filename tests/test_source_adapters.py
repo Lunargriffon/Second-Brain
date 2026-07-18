@@ -3,6 +3,7 @@ from pathlib import Path
 
 from pkb.sources.x_bookmarks import XBookmarkAdapter
 from pkb.sources.zhihu import ZhihuAdapter
+from pkb.sources.douyin_favorites import DouyinFavoritesAdapter
 
 
 FIXTURES = Path("tests/fixtures/knowledge")
@@ -108,3 +109,22 @@ def test_x_adapter_ignores_quoted_tweet_content_and_identity():
     assert doc.identity_key == "zhihu:answer:123"
     assert doc.plain_content == record["text"]
     assert "quoted text" not in doc.plain_content
+
+
+def test_douyin_adapter_builds_searchable_text_without_media_references():
+    record = _record("douyin-favorites.jsonl")
+
+    doc = DouyinFavoritesAdapter().normalize(
+        record, raw_path=Path("douyin-favorites.jsonl"), raw_line=1
+    )
+
+    assert doc.identity_key == "douyin:work:7351234567890123456"
+    assert doc.canonical_url == "https://www.douyin.com/video/7351234567890123456"
+    assert doc.membership.collection_id == "favorites"
+    assert doc.title == "如何建立长期记忆"
+    assert "#学习方法 #长期记忆" in doc.plain_content
+    assert "[00:00] 间隔重复能够对抗遗忘曲线" in doc.plain_content
+    assert "[00:02] 主动回忆也很重要" in doc.plain_content
+    assert doc.media_urls == ()
+    assert "private.example" not in doc.plain_content
+    assert "C:/private" not in doc.plain_content

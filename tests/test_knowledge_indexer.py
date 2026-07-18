@@ -287,3 +287,20 @@ def test_later_source_edit_updates_and_queues_a_new_job(
     assert repository.connection.execute(
         "SELECT COUNT(*) FROM jobs WHERE document_id=?", (document_id,)
     ).fetchone()[0] == 2
+
+
+def test_douyin_favorites_route_indexes_spoken_phrase(
+    repository: KnowledgeRepository, tmp_path: Path
+) -> None:
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    fixture = Path("tests/fixtures/knowledge/douyin-favorites.jsonl")
+    (raw / "douyin-favorites-20260718.jsonl").write_bytes(fixture.read_bytes())
+
+    report = KnowledgeIndexer(repository).build(raw)
+
+    assert report.created == 1
+    result = SearchIndex(repository).search("对抗遗忘曲线")
+    assert len(result) == 1
+    assert result[0].title == "如何建立长期记忆"
+    assert repository.resolve_identity("douyin:work:7351234567890123456") is not None

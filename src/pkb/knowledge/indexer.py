@@ -9,6 +9,7 @@ from typing import Mapping
 from contextlib import nullcontext
 
 from pkb.sources.base import SourceAdapter
+from pkb.sources.douyin_favorites import DouyinFavoritesAdapter
 from pkb.sources.x_bookmarks import XBookmarkAdapter
 from pkb.sources.zhihu import ZhihuAdapter
 
@@ -43,6 +44,8 @@ class KnowledgeIndexer:
             return ZhihuAdapter()
         if name.startswith("x-bookmarks") and name.endswith(".jsonl"):
             return XBookmarkAdapter()
+        if name.startswith("douyin-favorites") and name.endswith(".jsonl"):
+            return DouyinFavoritesAdapter()
         return None
 
     def build(self, raw_dir: str | Path, *, strict: bool = False) -> IndexReport:
