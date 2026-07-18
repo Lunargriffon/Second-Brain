@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import subprocess
+import tempfile
 from pathlib import Path
+
+from pkb.cli import _default_douyin_temp_root
 
 
 def test_generated_vault_projection_is_git_ignored() -> None:
@@ -26,3 +29,11 @@ def test_generated_vault_projection_is_git_ignored() -> None:
     }
 
     assert ignored == set(generated)
+
+
+def test_douyin_default_temp_root_is_outside_repository() -> None:
+    root = Path(__file__).resolve().parents[1]
+    temp_root = _default_douyin_temp_root()
+
+    assert temp_root.is_relative_to(Path(tempfile.gettempdir()))
+    assert not temp_root.is_relative_to(root)

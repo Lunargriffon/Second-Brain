@@ -4,9 +4,10 @@ import argparse
 import json
 import os
 import re
+import tempfile
 from dataclasses import asdict
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 from pkb.derive.provider import DerivationProvider
 
@@ -59,6 +60,9 @@ def main(argv: Sequence[str] | None = None, *, provider: DerivationProvider | No
 
     if args.command == "export" and args.source == "zhihu-batch":
         return _run_zhihu_batch(args)
+
+    if args.command == "export" and args.source == "douyin-favorites":
+        return _run_douyin_favorites(args)
 
     if args.command == "audit" and args.source == "zhihu":
         return _run_zhihu_audit(args)
@@ -146,6 +150,14 @@ def _build_parser() -> argparse.ArgumentParser:
     batch_parser.add_argument("--request-delay", type=float, default=2.0)
     batch_parser.add_argument("--max-retry", type=int, default=3)
 
+    douyin_parser = export_subparsers.add_parser("douyin-favorites")
+    douyin_parser.add_argument("--output", default="data/raw/douyin-favorites.jsonl")
+    douyin_parser.add_argument("--state", default="data/state/douyin-favorites.state.json")
+    douyin_parser.add_argument("--report", default="data/state/douyin-favorites.audit.json")
+    douyin_parser.add_argument("--limit", type=int, choices=range(1, 21), default=20)
+    douyin_parser.add_argument("--request-delay", type=_douyin_request_delay, default=7.0)
+    douyin_parser.add_argument("--temp-root")
+
     audit_zhihu_parser = audit_subparsers.add_parser("zhihu")
     audit_zhihu_parser.add_argument("--collections-file", required=True)
     audit_zhihu_parser.add_argument("--fixture")
@@ -181,6 +193,64 @@ def _build_parser() -> argparse.ArgumentParser:
     images_index_parser.add_argument("--report", default="data/state/zhihu-image-triage.json")
     images_index_parser.add_argument("--output", default="data/state/zhihu-image-article-index.json")
     return parser
+
+
+def _default_douyin_temp_root() -> Path:
+    """Return the dedicated media root outside the repository worktree."""
+    return (Path(tempfile.gettempdir()) / "pkb-douyin-favorites").resolve()
+
+
+def _douyin_request_delay(value: str) -> float:
+    delay = float(value)
+    if delay < 5:
+        raise argparse.ArgumentTypeError("request delay must be at least 5 seconds")
+    return delay
+
+
+def run_douyin_trial(
+    *,
+    output: Path,
+    state: Path,
+    report: Path,
+    temp_root: Path,
+    limit: int,
+    request_delay: float,
+) -> Any:
+    """Compose the live authenticated trial; Task 9 supplies the browser adapter."""
+    raise RuntimeError("douyin trial backend is not configured")
+
+
+def _run_douyin_favorites(args: argparse.Namespace) -> int:
+    temp_root = Path(args.temp_root).resolve() if args.temp_root else _default_douyin_temp_root()
+    try:
+        audit = run_douyin_trial(
+            output=Path(args.output),
+            state=Path(args.state),
+            report=Path(args.report),
+            temp_root=temp_root,
+            limit=args.limit,
+            request_delay=args.request_delay,
+        )
+    except Exception:
+        print("Douyin trial stopped: internal_error", file=__import__("sys").stderr)
+        return 1
+
+    counts = audit.counts
+    safe_errors = []
+    for code, count in sorted(audit.errors.items()):
+        safe_code = code if re.fullmatch(r"[a-z0-9_]+", code) else "internal_error"
+        safe_errors.append(f"{safe_code}:{int(count)}")
+    print(
+        f"selected={counts.get('selected', 0)} "
+        f"persisted={counts.get('persisted', 0)} "
+        f"cleaned={counts.get('cleaned', 0)} "
+        f"unavailable={counts.get('unavailable', 0)} "
+        f"failed={counts.get('failed', 0)} "
+        f"cleanup_pending={audit.cleanup_pending} "
+        f"stopped={str(audit.stopped).lower()} "
+        f"errors={','.join(safe_errors) or '-'}"
+    )
+    return 1 if audit.stopped else 0
 
 
 def _add_knowledge_parsers(subparsers: argparse._SubParsersAction) -> None:
