@@ -1,0 +1,18 @@
+{
+  "items": [
+    {
+      "aweme_id": "7001",
+      "share_url": "https://www.douyin.com/video/7001",
+      "author": {"uid": "author-1", "nickname": "知识作者"},
+      "desc": "一个知识视频 #学习 #AI",
+      "text_extra": [
+        {"hashtag_name": "学习"},
+        {"hashtag_name": "AI"}
+      ],
+      "create_time": 1784304000
+    }
+  ],
+  "cursor": "next-page",
+  "has_more": true,
+  "observed_at": "2026-07-18T00:00:00Z"
+}
