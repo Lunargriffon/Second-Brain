@@ -54,6 +54,25 @@ def test_operations_guide_covers_required_workflows():
         assert safety_term in text
 
 
+def test_operations_guide_covers_bounded_douyin_trial_and_recovery():
+    text = OPERATIONS_GUIDE.read_text(encoding="utf-8")
+
+    for required in (
+        "## Import Douyin Favorites Transcripts",
+        'python -m pip install -e ".[dev,search,douyin]"',
+        "pkb export douyin-favorites --limit 20 --request-delay 7",
+        "pkb index build --raw-dir data/raw --db data/index/knowledge.db --strict",
+        'pkb search "口述内容中的短语" --db data/index/knowledge.db --source douyin',
+        "auth_required",
+        "captcha",
+        "http_403",
+        "http_429",
+        "cleanup_pending",
+        "five speech-bearing transcripts",
+    ):
+        assert required in text
+
+
 def test_readme_links_shipped_guides_and_has_clean_workflow():
     text = README.read_text(encoding="utf-8")
 

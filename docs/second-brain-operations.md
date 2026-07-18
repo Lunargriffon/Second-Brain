@@ -29,6 +29,41 @@ should report zero creates, updates, search updates, and new jobs. Strict mode
 fails the transaction on a malformed supported record; without `--strict`, bad
 records are reported and valid records continue.
 
+## Import Douyin Favorites Transcripts
+
+This is a local-only, bounded trial. It reuses the authenticated Chrome session;
+do not export, paste, or upload cookies. Install the speech and search extras plus
+the local executables `ffmpeg`, `ffprobe`, `yt-dlp`, and OpenCLI:
+
+```powershell
+python -m pip install -e ".[dev,search,douyin]"
+pkb export douyin-favorites --limit 20 --request-delay 7
+```
+
+The command never accepts more than 20 items and never accepts a request delay
+below five seconds. Video and WAV files live under the operating-system temporary
+directory and are deleted only after the transcript JSONL has been flushed to
+durable storage. The audit is written atomically to
+`data/state/douyin-favorites.audit.json`; `cleanup_pending=0` confirms that no
+persisted item still has temporary media waiting for deletion.
+
+If the command reports `auth_required`, log into Douyin in Chrome and run the
+same command again. `captcha`, `http_403`, and `http_429` are safe stop signals:
+complete any visible challenge yourself, wait before retrying, and do not try to
+bypass platform controls. The manifest checkpoint makes the identical command
+the recovery command; completed items are not downloaded or transcribed twice.
+
+Index and search the retained text locally:
+
+```powershell
+pkb index build --raw-dir data/raw --db data/index/knowledge.db --strict
+pkb search "口述内容中的短语" --db data/index/knowledge.db --source douyin
+```
+
+Before approving any full-library import, inspect the 20-item audit and manually
+compare five speech-bearing transcripts with their source videos. Full-library
+pagination requires a separate reviewed plan; do not raise the trial limit.
+
 ## Search
 
 Search is local and lexical by default:

@@ -216,8 +216,13 @@ def run_douyin_trial(
     limit: int,
     request_delay: float,
 ) -> Any:
-    """Compose the live authenticated trial; Task 9 supplies the browser adapter."""
-    raise RuntimeError("douyin trial backend is not configured")
+    """Compose the local authenticated trial without exporting browser cookies."""
+    from pkb.douyin.live import run_live_trial
+
+    return run_live_trial(
+        output=output, state=state, report=report, temp_root=temp_root,
+        limit=limit, request_delay=request_delay,
+    )
 
 
 def _run_douyin_favorites(args: argparse.Namespace) -> int:
