@@ -89,7 +89,7 @@ def test_pipeline_persists_before_cleanup_and_reaches_cleaned(tmp_path, monkeypa
     assert record["transcript_text"] == "你好世界"
     assert record["source_duration_seconds"] == 12
     assert transcriber.calls == [("one", 9.0)]
-    assert audit.counts == {"persisted": 1, "cleaned": 1}
+    assert audit.counts == {"selected": 1, "persisted": 1, "cleaned": 1}
 
 
 def test_durable_store_is_append_once_by_work_id(tmp_path):
@@ -109,6 +109,7 @@ def test_stop_run_records_safe_code_and_does_not_start_later_items(tmp_path):
 
     assert audit.stopped is True
     assert audit.errors == {"captcha": 1}
+    assert audit.counts == {"selected": 2, "failed": 1}
     assert acquirer.calls == ["blocked"]
     assert manifest.get("blocked").stage is Stage.FAILED
     assert manifest.get("later").stage is Stage.DISCOVERED
@@ -123,6 +124,12 @@ def test_unavailable_is_terminal_but_next_item_continues(tmp_path):
     assert manifest.get("ok").stage is Stage.CLEANED
     assert acquirer.calls == ["gone", "ok"]
     assert audit.errors == {"http_404": 1}
+    assert audit.counts == {
+        "selected": 2,
+        "unavailable": 1,
+        "persisted": 1,
+        "cleaned": 1,
+    }
 
 
 def test_persisted_item_resumes_cleanup_without_duplicate_or_retranscription(tmp_path):
@@ -139,7 +146,7 @@ def test_persisted_item_resumes_cleanup_without_duplicate_or_retranscription(tmp
     assert manifest.get("one").stage is Stage.CLEANED
     assert transcriber.calls == []
     assert media.cleaned == ["one"]
-    assert audit.counts == {"cleaned": 1}
+    assert audit.counts == {"selected": 1, "cleaned": 1}
     assert (tmp_path / "raw.jsonl").read_text(encoding="utf-8").count("\n") == 1
 
 
@@ -150,6 +157,7 @@ def test_cleanup_failure_leaves_persisted_for_retry(tmp_path):
     assert manifest.get("one").stage is Stage.PERSISTED
     assert audit.errors == {"cleanup_failed": 1}
     assert audit.cleanup_pending == 1
+    assert audit.counts == {"selected": 1, "persisted": 1, "failed": 1}
 
 
 def test_indexed_item_can_resume_cleanup(tmp_path):
@@ -162,7 +170,7 @@ def test_indexed_item_can_resume_cleanup(tmp_path):
     assert manifest.get("one").stage is Stage.CLEANED
     assert media.cleaned == ["one"]
     assert transcriber.calls == []
-    assert audit.counts == {"cleaned": 1}
+    assert audit.counts == {"selected": 1, "cleaned": 1}
 
 
 def test_second_run_is_idempotent(tmp_path):
@@ -177,4 +185,29 @@ def test_second_run_is_idempotent(tmp_path):
     assert acquirer.calls == ["one"]
     assert len(transcriber.calls) == 1
     assert media.cleaned == ["one"]
-    assert audit.counts == {}
+    assert audit.counts == {"selected": 0}
+
+
+def test_existing_raw_line_is_not_counted_as_newly_persisted(tmp_path):
+    pipeline, manifest, _, _, _ = build(tmp_path, [item()])
+    manifest.update("one", Stage.ACQUIRED)
+    manifest.update("one", Stage.AUDIO_READY)
+    manifest.update("one", Stage.TRANSCRIBED)
+    DurableJsonlStore(tmp_path / "raw.jsonl").append_once({"work_id": "one"})
+
+    audit = pipeline.run()
+
+    assert manifest.get("one").stage is Stage.CLEANED
+    assert audit.counts == {"selected": 1, "cleaned": 1}
+
+
+def test_non_acquisition_processing_error_counts_failed_without_detail(tmp_path):
+    pipeline, manifest, _, _, transcriber = build(tmp_path, [item()])
+    transcriber.transcribe = lambda *_args: (_ for _ in ()).throw(RuntimeError("secret"))
+
+    audit = pipeline.run()
+
+    assert manifest.get("one").stage is Stage.FAILED
+    assert audit.counts == {"selected": 1, "failed": 1}
+    assert audit.errors == {"transcription_failed": 1}
+    assert "secret" not in repr(audit)

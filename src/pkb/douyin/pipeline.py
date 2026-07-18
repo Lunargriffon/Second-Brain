@@ -91,11 +91,12 @@ class DouyinPipeline:
         self.probe = probe
 
     def run(self) -> RunAudit:
-        counts: Counter[str] = Counter()
+        pending_items = self.manifest.pending()
+        counts: Counter[str] = Counter({"selected": len(pending_items)})
         errors: Counter[str] = Counter()
         stopped = False
 
-        for pending in self.manifest.pending():
+        for pending in pending_items:
             if stopped:
                 break
             item = self.manifest.get(pending.work_id)
@@ -116,20 +117,24 @@ class DouyinPipeline:
                     if item.stage is Stage.AUDIO_READY:
                         item = self.manifest.update(item.work_id, Stage.TRANSCRIBED)
                     record = self._record(item, result, info)
-                    self.raw_store.append_once(record)
+                    appended = self.raw_store.append_once(record)
+                    if appended:
+                        counts["persisted"] += 1
                     item = self.manifest.update(item.work_id, Stage.PERSISTED)
-                    counts["persisted"] += 1
             except AcquisitionFailure as exc:
                 errors[exc.code] += 1
                 if exc.disposition is AcquisitionDisposition.UNAVAILABLE:
                     self.manifest.update(item.work_id, Stage.UNAVAILABLE)
+                    counts["unavailable"] += 1
                 else:
                     self._mark_failed(item)
+                    counts["failed"] += 1
                     stopped = exc.disposition is AcquisitionDisposition.STOP_RUN
                 continue
             except Exception:
                 errors[self._phase_error(item.stage)] += 1
                 self._mark_failed(item)
+                counts["failed"] += 1
                 continue
 
             item = self.manifest.get(item.work_id)
@@ -138,6 +143,7 @@ class DouyinPipeline:
                     self.media.cleanup(paths.work_dir)
                 except Exception:
                     errors["cleanup_failed"] += 1
+                    counts["failed"] += 1
                     continue
                 self.manifest.update(item.work_id, Stage.CLEANED)
                 counts["cleaned"] += 1
