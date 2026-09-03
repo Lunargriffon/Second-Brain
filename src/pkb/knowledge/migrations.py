@@ -6,8 +6,12 @@ import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 
+from .job_scopes import JobScope, scope_hash as calculate_scope_hash
+from .schema_v7 import KNOWLEDGE_SCHEMA_V7
+from .schema_v8 import CREATE_V8_JOB_TABLES, FINALIZE_V8_JOB_TABLES
 
-SCHEMA_VERSION = 6
+
+SCHEMA_VERSION = 8
 
 
 _MIGRATION_1 = (
@@ -280,13 +284,88 @@ _MIGRATION_6 = (
     "CREATE INDEX idx_relation_pair_state_derivation ON relation_pair_state(derivation_id)",
 )
 
-_MIGRATIONS = {
+
+MigrationStep = tuple[str, ...] | Callable[[sqlite3.Connection], None]
+
+
+def _apply_migration(
+    connection: sqlite3.Connection, migration: MigrationStep
+) -> None:
+    if callable(migration):
+        migration(connection)
+        return
+    for statement in migration:
+        connection.execute(statement)
+
+
+def _copy_v8_jobs(connection: sqlite3.Connection) -> None:
+    """Copy v7 jobs using their canonical single-document anchor identity."""
+    jobs = connection.execute(
+        """SELECT id, job_type, document_id, input_hash, pipeline_version,
+                  status, attempts, worker_id, leased_at, lease_expires_at,
+                  heartbeat_at, error, created_at, updated_at
+           FROM jobs ORDER BY id"""
+    ).fetchall()
+    for job in jobs:
+        anchor = JobScope("document", str(job[2]), "anchor", 0)
+        identity = calculate_scope_hash((anchor,))
+        connection.execute(
+            """INSERT INTO jobs_v8
+               (id, job_type, document_id, scope_hash, input_hash,
+                pipeline_version, status, attempts, worker_id, leased_at,
+                lease_expires_at, heartbeat_at, error, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (job[0], job[1], job[2], identity, *job[3:]),
+        )
+        connection.execute(
+            """INSERT INTO job_scopes_v8
+               (job_id, scope_type, scope_id, scope_role, ordinal, created_at)
+               VALUES (?, 'document', ?, 'anchor', 0, ?)""",
+            (job[0], str(job[2]), job[12]),
+        )
+
+
+def _migrate_v8(connection: sqlite3.Connection) -> None:
+    for statement in CREATE_V8_JOB_TABLES:
+        connection.execute(statement)
+    _copy_v8_jobs(connection)
+    connection.execute(
+        """INSERT INTO job_events_v8
+           (id, job_id, event_type, worker_id, details_json, created_at)
+           SELECT id, job_id, event_type, worker_id, details_json, created_at
+           FROM job_events ORDER BY id"""
+    )
+    expected_jobs = connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+    expected_events = connection.execute(
+        "SELECT COUNT(*) FROM job_events"
+    ).fetchone()[0]
+    if connection.execute("SELECT COUNT(*) FROM jobs_v8").fetchone()[0] != expected_jobs:
+        raise RuntimeError("v8 job copy count mismatch")
+    if (
+        connection.execute("SELECT COUNT(*) FROM job_events_v8").fetchone()[0]
+        != expected_events
+    ):
+        raise RuntimeError("v8 job event copy count mismatch")
+    if (
+        connection.execute("SELECT COUNT(*) FROM job_scopes_v8").fetchone()[0]
+        != expected_jobs
+    ):
+        raise RuntimeError("v8 job scope copy count mismatch")
+    for statement in FINALIZE_V8_JOB_TABLES:
+        connection.execute(statement)
+    violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        raise RuntimeError(f"v8 migration produced foreign key violations: {violations!r}")
+
+_MIGRATIONS: dict[int, MigrationStep] = {
     1: _MIGRATION_1,
     2: _MIGRATION_2,
     3: _MIGRATION_3,
     4: _MIGRATION_4,
     5: _MIGRATION_5,
     6: _MIGRATION_6,
+    7: KNOWLEDGE_SCHEMA_V7,
+    8: _migrate_v8,
 }
 
 
@@ -301,10 +380,19 @@ def migrate(connection: sqlite3.Connection) -> None:
         )
     while current_version < SCHEMA_VERSION:
         next_version = current_version + 1
-        with connection:
-            for statement in _MIGRATIONS[next_version]:
-                connection.execute(statement)
-            connection.execute(f"PRAGMA user_version = {next_version}")
+        migration = _MIGRATIONS[next_version]
+        # Rebuilding a referenced parent table requires temporarily disabling
+        # FK actions.  The callable validates the final graph before commit.
+        disable_foreign_keys = callable(migration)
+        if disable_foreign_keys:
+            connection.execute("PRAGMA foreign_keys = OFF")
+        try:
+            with connection:
+                _apply_migration(connection, migration)
+                connection.execute(f"PRAGMA user_version = {next_version}")
+        finally:
+            if disable_foreign_keys:
+                connection.execute("PRAGMA foreign_keys = ON")
         current_version = next_version
 
 

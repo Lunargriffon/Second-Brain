@@ -1,7 +1,6 @@
 import json
 from pathlib import Path
 
-import pytest
 
 from pkb.douyin.manifest import ManifestStore
 from pkb.douyin.media import AcquisitionFailure, MediaPaths

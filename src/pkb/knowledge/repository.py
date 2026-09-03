@@ -11,6 +11,7 @@ from typing import Any
 
 from .migrations import migrate
 from .models import NormalizedDocument
+from .job_scopes import JobScope, scope_hash
 from .urls import canonicalize_url, platform_identity
 from .fingerprint import derivation_input_hash
 from .review_models import DocumentNotFoundError, READING_STATUSES, ReadingState, normalize_tag
@@ -120,6 +121,15 @@ class KnowledgeRepository:
                     ),
                     )
 
+            if created or incoming_wins:
+                self._record_text_version(
+                    document_id=document_id,
+                    source_hash=source_hash,
+                    normalized_hash=normalized_hash,
+                    normalization_version=normalization_version,
+                    plain_content=document.plain_content,
+                )
+
             if canonical_url:
                 self.connection.execute(
                     """INSERT INTO document_url_aliases(document_id, url, observed_url, source)
@@ -164,6 +174,40 @@ class KnowledgeRepository:
                     (document_id, remote_url, order),
                 )
         return UpsertResult(document_id, created, normalized_changed, source_changed)
+
+    def _record_text_version(
+        self,
+        *,
+        document_id: int,
+        source_hash: str,
+        normalized_hash: str,
+        normalization_version: int,
+        plain_content: str,
+    ) -> None:
+        """Record the current normalized projection without rewriting old text."""
+        self.connection.execute(
+            """UPDATE document_text_versions
+               SET invalidated_at=CURRENT_TIMESTAMP,
+                   invalidation_reason='normalized document version changed'
+               WHERE document_id=? AND invalidated_at IS NULL
+                 AND (normalized_content_hash<>? OR normalization_version<>?)""",
+            (document_id, normalized_hash, normalization_version),
+        )
+        self.connection.execute(
+            """INSERT INTO document_text_versions
+               (document_id, source_content_hash, normalized_content_hash,
+                normalization_version, plain_content)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(document_id, normalized_content_hash, normalization_version)
+               DO NOTHING""",
+            (
+                document_id,
+                source_hash,
+                normalized_hash,
+                normalization_version,
+                plain_content,
+            ),
+        )
 
     def _find_document(self, identity_key: str, canonical_url: str, source_hash: str) -> sqlite3.Row | None:
         candidate_ids: set[int] = set()
@@ -239,6 +283,7 @@ class KnowledgeRepository:
             self._move_simple("source_memberships", survivor_id, duplicate_id, ("source", "source_item_id", "collection_id"))
             self._move_simple("document_url_aliases", survivor_id, duplicate_id, ("url",))
             self._move_simple("media", survivor_id, duplicate_id, ("remote_url",))
+            self._move_text_versions(survivor_id, duplicate_id)
             self._move_user_tags(survivor_id, duplicate_id)
             self.connection.execute("DELETE FROM reading_state WHERE document_id IN (?, ?)", (survivor_id, duplicate_id))
             if chosen:
@@ -259,6 +304,42 @@ class KnowledgeRepository:
             self._assert_no_duplicate_children(duplicate_id)
             self.connection.execute("DELETE FROM documents WHERE id=?", (duplicate_id,))
         return merge_id
+
+    def _move_text_versions(self, survivor: int, duplicate: int) -> None:
+        rows = self.connection.execute(
+            "SELECT * FROM document_text_versions WHERE document_id=? ORDER BY id",
+            (duplicate,),
+        ).fetchall()
+        for row in rows:
+            existing = self.connection.execute(
+                """SELECT * FROM document_text_versions
+                   WHERE document_id=? AND normalized_content_hash=?
+                     AND normalization_version=?""",
+                (
+                    survivor,
+                    row["normalized_content_hash"],
+                    row["normalization_version"],
+                ),
+            ).fetchone()
+            if existing:
+                if existing["plain_content"] != row["plain_content"]:
+                    raise MergeConflictError("conflicting normalized text version evidence")
+                self.connection.execute(
+                    "DELETE FROM document_text_versions WHERE id=?", (row["id"],)
+                )
+            else:
+                if row["invalidated_at"] is None:
+                    self.connection.execute(
+                        """UPDATE document_text_versions
+                           SET invalidated_at=CURRENT_TIMESTAMP,
+                               invalidation_reason='source document merged'
+                           WHERE id=?""",
+                        (row["id"],),
+                    )
+                self.connection.execute(
+                    "UPDATE document_text_versions SET document_id=? WHERE id=?",
+                    (survivor, row["id"]),
+                )
 
     def _move_simple(self, table: str, survivor: int, duplicate: int, conflict: tuple[str, ...]) -> None:
         rows = self.connection.execute(f"SELECT * FROM {table} WHERE document_id=?", (duplicate,)).fetchall()
@@ -335,6 +416,7 @@ class KnowledgeRepository:
             "document_topics": "document_id", "reading_state": "document_id", "jobs": "document_id",
             "relations": "source_document_id", "document_id_aliases": "canonical_document_id",
             "document_identity_aliases": "canonical_document_id",
+            "document_text_versions": "document_id",
         }
         for table, column in checks.items():
             if self.connection.execute(f"SELECT 1 FROM {table} WHERE {column}=? LIMIT 1", (duplicate,)).fetchone():
@@ -526,13 +608,28 @@ class KnowledgeRepository:
         commit: bool = True,
     ) -> bool:
         """Queue one pending article job, returning whether it was newly created."""
+        anchor = JobScope("document", str(document_id), "anchor", 0)
+        identity = scope_hash((anchor,))
         with self.connection if commit else nullcontext():
             cursor = self.connection.execute(
                 """INSERT OR IGNORE INTO jobs
-                   (job_type, document_id, input_hash, pipeline_version, status)
-                   VALUES ('article', ?, ?, ?, 'pending')""",
-                (document_id, input_hash, pipeline_version),
+                   (job_type, document_id, scope_hash, input_hash, pipeline_version, status)
+                   VALUES ('article', ?, ?, ?, ?, 'pending')""",
+                (document_id, identity, input_hash, pipeline_version),
             )
+            if cursor.rowcount == 1:
+                job_id = int(cursor.lastrowid)
+                self.connection.execute(
+                    """INSERT INTO job_scopes
+                       (job_id, scope_type, scope_id, scope_role, ordinal)
+                       VALUES (?, 'document', ?, 'anchor', 0)""",
+                    (job_id, str(document_id)),
+                )
+                self.connection.execute(
+                    """INSERT INTO job_events(job_id, event_type, details_json)
+                       VALUES (?, 'enqueued', ?)""",
+                    (job_id, json.dumps({"scope_hash": identity}, separators=(",", ":"))),
+                )
         return cursor.rowcount == 1
 
     def document(self, document_id: int) -> sqlite3.Row | None:

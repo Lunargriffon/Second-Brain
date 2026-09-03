@@ -25,6 +25,18 @@ CORE_TABLES = {
     "document_merges",
     "documents_search_content",
     "documents_fts",
+    "document_text_versions",
+    "entities",
+    "entity_aliases",
+    "entity_mentions",
+    "facts",
+    "fact_evidence",
+    "fact_relations",
+    "fact_relation_evidence",
+    "entity_merge_events",
+    "knowledge_events",
+    "derivation_scopes",
+    "job_scopes",
 }
 
 
@@ -227,14 +239,16 @@ def test_schema_enforces_identity_membership_alias_and_job_uniqueness(tmp_path):
 
     connection.execute(
         """INSERT INTO jobs
-           (job_type, document_id, input_hash, pipeline_version, status)
-           VALUES ('derive', 1, 'input-1', 'v1', 'pending')"""
+           (job_type, document_id, scope_hash, input_hash, pipeline_version, status)
+           VALUES ('derive', 1, ?, 'input-1', 'v1', 'pending')""",
+        ("a" * 64,),
     )
     with pytest.raises(sqlite3.IntegrityError):
         connection.execute(
             """INSERT INTO jobs
-               (job_type, document_id, input_hash, pipeline_version, status)
-               VALUES ('derive', 1, 'input-1', 'v1', 'pending')"""
+               (job_type, document_id, scope_hash, input_hash, pipeline_version, status)
+               VALUES ('derive', 1, ?, 'input-1', 'v1', 'pending')""",
+            ("a" * 64,),
         )
 
 

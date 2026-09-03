@@ -88,6 +88,67 @@ def test_only_owner_can_heartbeat_succeed_or_fail(job_queue):
     assert job_queue.get(job_id).status == "succeeded"
 
 
+def test_publish_and_succeed_is_one_transaction(job_queue):
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    job_id = job_queue.enqueue("article", 1, "publish-hash", "v1")
+    job_queue.claim("owner", now=now)
+
+    job_queue.publish_and_succeed(
+        job_id,
+        "owner",
+        lambda connection: connection.execute(
+            "UPDATE documents SET title='published' WHERE id=1"
+        ),
+        now=now + timedelta(minutes=1),
+    )
+
+    assert job_queue.get(job_id).status == "succeeded"
+    assert job_queue.connection.execute(
+        "SELECT title FROM documents WHERE id=1"
+    ).fetchone()[0] == "published"
+
+
+def test_lost_lease_blocks_publication_before_domain_write(job_queue):
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    job_id = job_queue.enqueue("article", 1, "lost-hash", "v1")
+    job_queue.claim("old", now=now, lease=timedelta(seconds=1))
+    job_queue.claim("new", now=now + timedelta(seconds=2))
+
+    with pytest.raises(LeaseOwnershipError):
+        job_queue.publish_and_succeed(
+            job_id,
+            "old",
+            lambda connection: connection.execute(
+                "UPDATE documents SET title='must-not-persist' WHERE id=1"
+            ),
+            now=now + timedelta(seconds=2),
+        )
+
+    assert job_queue.connection.execute(
+        "SELECT title FROM documents WHERE id=1"
+    ).fetchone()[0] is None
+
+
+def test_publication_exception_rolls_back_domain_write_and_job_state(job_queue):
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    job_id = job_queue.enqueue("article", 1, "rollback-hash", "v1")
+    job_queue.claim("owner", now=now)
+
+    def broken_publish(connection):
+        connection.execute("UPDATE documents SET title='rolled-back' WHERE id=1")
+        raise RuntimeError("publication failed")
+
+    with pytest.raises(RuntimeError, match="publication failed"):
+        job_queue.publish_and_succeed(
+            job_id, "owner", broken_publish, now=now + timedelta(minutes=1)
+        )
+
+    assert job_queue.connection.execute(
+        "SELECT title FROM documents WHERE id=1"
+    ).fetchone()[0] is None
+    assert job_queue.get(job_id).status == "running"
+
+
 def test_fail_marks_job_failed_and_records_error(job_queue):
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     job_id = job_queue.enqueue("article", 1, "hash", "v1")

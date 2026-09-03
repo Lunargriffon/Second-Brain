@@ -97,6 +97,29 @@ count. Use `--unlimited` only after an explicit full-corpus decision; it is not
 the safe daily default. Derivations are versioned and source-grounded and do not
 replace manual tags or reading decisions.
 
+## Knowledge Layer Status
+
+The Fact/Entity knowledge-layer schema and transactional repositories exist,
+and their seven lifecycle acceptance scenarios can be verified with:
+
+```powershell
+python -m pytest tests/test_fact_entity_acceptance.py -v
+```
+
+Fact extraction and `pkb think` are not enabled yet. Do not populate the
+knowledge tables manually; doing so bypasses evidence-span validation,
+lifecycle transitions, invalidation propagation, and audit events.
+
+### Cross-domain Job Scope Status
+
+Schema v8 and the scoped `JobQueue` are enabled, while legacy document-anchored
+article jobs remain supported. Valid scope types are `document`, `entity`,
+`fact`, `fact_relation`, and `synthesis`; every job must have exactly one
+`anchor` scope. Rows in `job_scopes` are infrastructure and audit data and must
+not be edited manually. Fact extraction, knowledge maintenance workers,
+synthesis, and the dream cycle remain disabled until their separately reviewed
+plans are implemented.
+
 ## Export the Vault
 
 Render the deterministic projection and then check it:

@@ -120,10 +120,16 @@ def test_merge_rejects_unsafe_child_records_without_writing_anything(repository)
     db.execute("INSERT INTO topics(normalized_name, display_name) VALUES ('topic', 'Topic')")
     db.execute("INSERT INTO document_topics(document_id, topic_id, origin, derivation_id) VALUES (?, 1, 'ai', 'd1')", (duplicate,))
     db.execute("INSERT INTO relations(source_document_id, target_document_id, relation_type, evidence, derivation_id) VALUES (?, ?, 'related', 'why', 'd1')", (duplicate, other))
-    job = db.execute("INSERT INTO jobs(job_type, document_id, input_hash, pipeline_version, status) VALUES ('derive', ?, 'jhash', 'v1', 'failed')", (duplicate,)).lastrowid
+    assert repository.enqueue_derivation_job(
+        duplicate, input_hash="jhash", pipeline_version="v1"
+    )
+    job = db.execute(
+        "SELECT id FROM jobs WHERE document_id=? AND input_hash='jhash'", (duplicate,)
+    ).fetchone()[0]
     db.execute("INSERT INTO job_events(job_id, event_type) VALUES (?, 'failed')", (job,))
     db.execute("INSERT INTO document_identity_aliases(alias_identity_key, canonical_document_id) VALUES ('legacy:2', ?)", (duplicate,))
     db.commit()
+    event_count = db.execute("SELECT COUNT(*) FROM job_events").fetchone()[0]
 
     with pytest.raises(MergeConflictError, match="derived or queued"):
         repository.merge_documents(survivor, duplicate, reason="same")
@@ -131,7 +137,7 @@ def test_merge_rejects_unsafe_child_records_without_writing_anything(repository)
     for table in ("derivations", "document_tags", "document_topics", "jobs"):
         assert db.execute(f"SELECT document_id FROM {table}").fetchone()[0] == duplicate
     assert db.execute("SELECT source_document_id FROM relations").fetchone()[0] == duplicate
-    assert db.execute("SELECT COUNT(*) FROM job_events").fetchone()[0] == 1
+    assert db.execute("SELECT COUNT(*) FROM job_events").fetchone()[0] == event_count
     assert repository.count_documents() == 3
     assert repository.count_merges() == 0
 

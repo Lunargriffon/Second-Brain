@@ -146,7 +146,7 @@ def test_articles_uses_documented_llm_env_without_leaking_key(db, tmp_path, caps
 def test_status_json_reports_sanitized_counts(db, capsys):
     with JobQueue(db) as queue:
         job_id = queue.enqueue("article", 1, "source-1", "article-v1")
-        job = queue.claim("worker")
+        queue.claim("worker")
         queue.fail(job_id, "worker", "private provider body")
     assert main(["derive", "status", "--db", str(db), "--format", "json"]) == 0
     payload = json.loads(capsys.readouterr().out)

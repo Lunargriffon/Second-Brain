@@ -7,6 +7,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from pkb.derive.jobs import JobQueue
 from pkb.derive.prompts import ARTICLE_PROMPT_VERSION
 from pkb.knowledge.fingerprint import derivation_input_hash
 
@@ -117,27 +118,7 @@ def migration_candidates(
 
 def queue_migration(database: str | Path, normalization_version: int, limit: int | None) -> int:
     candidates = migration_candidates(database, normalization_version, limit)
-    connection = sqlite3.connect(database, isolation_level=None)
-    try:
-        connection.execute("BEGIN IMMEDIATE")
-        inserted = 0
+    with JobQueue(database) as queue:
         for document_id, input_hash in candidates:
-            cursor = connection.execute(
-                """INSERT OR IGNORE INTO jobs
-                   (job_type, document_id, input_hash, pipeline_version, status)
-                   VALUES ('article', ?, ?, ?, 'pending')""",
-                (document_id, input_hash, ARTICLE_PROMPT_VERSION),
-            )
-            if cursor.rowcount:
-                job_id = int(cursor.lastrowid)
-                connection.execute(
-                    "INSERT INTO job_events(job_id, event_type) VALUES (?, 'enqueued')", (job_id,)
-                )
-                inserted += 1
-        connection.commit()
-        return inserted
-    except BaseException:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
+            queue.enqueue("article", document_id, input_hash, ARTICLE_PROMPT_VERSION)
+    return len(candidates)

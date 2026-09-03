@@ -19,7 +19,7 @@ with warnings.catch_warnings():
 
 jieba.setLogLevel(logging.WARNING)
 
-from .migrations import migrate
+from .migrations import migrate  # noqa: E402
 
 if TYPE_CHECKING:
     from .repository import KnowledgeRepository
@@ -179,14 +179,19 @@ class SearchIndex:
         return len(document_ids)
 
     def update_derived_projection(
-        self, document_id: int, *, summary: str = "", tags: tuple[str, ...] | list[str] = ()
+        self,
+        document_id: int,
+        *,
+        summary: str = "",
+        tags: tuple[str, ...] | list[str] = (),
+        commit: bool = True,
     ) -> None:
         if self.connection.execute(
             "SELECT 1 FROM documents_search_content WHERE document_id=?", (document_id,)
         ).fetchone() is None:
-            self.index_document(document_id)
+            self.index_document(document_id, commit=commit)
         tags_text = " ".join(dict.fromkeys(tag.strip() for tag in tags if tag.strip()))
-        with self.connection:
+        with self.connection if commit else nullcontext():
             self.connection.execute(
                 """UPDATE documents_search_content
                    SET summary=?, tags=?, summary_terms=?, tags_terms=?,

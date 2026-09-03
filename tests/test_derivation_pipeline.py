@@ -189,7 +189,7 @@ def test_pipeline_claims_only_article_jobs(database, tmp_path):
 
 
 @pytest.mark.parametrize("crash_stage", ["derivation", "projection"])
-def test_reclaimed_job_restores_after_committed_stage_without_second_provider_call(
+def test_article_publication_rolls_back_when_stage_fails(
     database, tmp_path, crash_stage
 ):
     def crash(stage: str) -> None:
@@ -202,18 +202,18 @@ def test_reclaimed_job_restores_after_committed_stage_without_second_provider_ca
     )
     with pytest.raises(RuntimeError, match="simulated crash"):
         pipeline.run(limit=1)
-    with sqlite3.connect(database) as connection:
-        connection.execute("UPDATE jobs SET lease_expires_at='2000-01-01T00:00:00Z' WHERE id=1")
-        connection.commit()
-
-    recovered = DerivationPipeline(
-        database, provider, run_log=tmp_path / "runs.jsonl"
-    ).run(limit=1)
-
-    assert recovered.succeeded == 1
+    assert rows(database, "SELECT * FROM derivations") == []
+    assert rows(database, "SELECT * FROM document_tags") == []
+    assert rows(database, "SELECT * FROM document_topics") == []
+    assert rows(
+        database, "SELECT * FROM documents_search_content WHERE document_id=1"
+    ) == []
+    assert rows(database, "SELECT status FROM jobs WHERE id=1")[0]["status"] == "running"
+    assert rows(
+        database,
+        "SELECT * FROM job_events WHERE job_id=1 AND event_type='succeeded'",
+    ) == []
     assert len(provider.requests) == 1
-    assert rows(database, "SELECT status FROM jobs WHERE id=1")[0]["status"] == "succeeded"
-    assert rows(database, "SELECT summary FROM documents_search_content WHERE document_id=1")[0]["summary"] == "先理解再练习"
 
 
 def test_new_derivation_replaces_current_ai_label_projection_but_keeps_history(database, tmp_path):
@@ -223,6 +223,7 @@ def test_new_derivation_replaces_current_ai_label_projection_but_keeps_history(d
     changed["tags"] = [{"name": "新标签", "confidence": 0.7}]
     changed["topics"] = [{"name": "新主题", "confidence": 0.7}]
     with sqlite3.connect(database) as connection:
+        connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("DELETE FROM jobs WHERE document_id=2")
         connection.execute(
             "UPDATE documents SET source_content_hash='source-new' WHERE id=1"
@@ -263,3 +264,12 @@ def test_expired_lease_after_provider_call_cannot_promote_result(database, tmp_p
         ).run(limit=1)
 
     assert rows(database, "SELECT * FROM derivations") == []
+    assert rows(database, "SELECT * FROM document_tags") == []
+    assert rows(database, "SELECT * FROM document_topics") == []
+    assert rows(
+        database, "SELECT * FROM documents_search_content WHERE document_id=1"
+    ) == []
+    assert rows(
+        database,
+        "SELECT * FROM job_events WHERE job_id=1 AND event_type='succeeded'",
+    ) == []

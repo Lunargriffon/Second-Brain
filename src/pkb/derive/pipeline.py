@@ -95,11 +95,17 @@ class DerivationPipeline:
                     payload = asdict(derived)
                     derivation_id = self._derivation_id(job)
                     self._append_log(job, derivation_id, "validated")
-                    self._insert_derivation(queue.connection, job, document, derivation_id, payload)
-                    self.stage_hook("derivation")
-                    self._project(search, job.document_id, derivation_id, payload)
-                    self.stage_hook("projection")
-                    queue.succeed(job.id, self.worker_id)
+                    def publish(connection: sqlite3.Connection) -> None:
+                        self._insert_derivation(
+                            connection, job, document, derivation_id, payload
+                        )
+                        self.stage_hook("derivation")
+                        self._project(
+                            connection, search, job.document_id, derivation_id, payload
+                        )
+                        self.stage_hook("projection")
+
+                    queue.publish_and_succeed(job.id, self.worker_id, publish)
                     succeeded += 1
                 except (DerivationValidationError, ProviderMalformedResponseError):
                     queue.fail(job.id, self.worker_id, "invalid_derivation")
@@ -145,56 +151,60 @@ class DerivationPipeline:
         ).fetchone() is not None
 
     def _insert_derivation(self, connection, job, document, derivation_id, payload) -> None:
-        with connection:
-            connection.execute(
-                """INSERT OR IGNORE INTO derivations
+        connection.execute(
+            """INSERT OR IGNORE INTO derivations
                    (id, document_id, kind, payload_json, input_hash, source_content_hash,
                     normalized_content_hash, normalization_version, schema_version,
                     prompt_version, provider, model, generation_parameters_json, status)
                    VALUES (?, ?, 'article', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'accepted')""",
-                (
-                    derivation_id, job.document_id,
-                    json.dumps(payload, ensure_ascii=False, sort_keys=True), job.input_hash,
-                    document["source_content_hash"], document["normalized_content_hash"],
-                    document["normalization_version"], ARTICLE_SCHEMA_VERSION,
-                    ARTICLE_PROMPT_VERSION, self.provider.provider_name,
-                    self.provider.model_name, "{}",
-                ),
-            )
+            (
+                derivation_id, job.document_id,
+                json.dumps(payload, ensure_ascii=False, sort_keys=True), job.input_hash,
+                document["source_content_hash"], document["normalized_content_hash"],
+                document["normalization_version"], ARTICLE_SCHEMA_VERSION,
+                ARTICLE_PROMPT_VERSION, self.provider.provider_name,
+                self.provider.model_name, "{}",
+            ),
+        )
 
     @staticmethod
-    def _project(search: SearchIndex, document_id: int, derivation_id: str, payload) -> None:
-        connection = search.connection
-        with connection:
-            connection.execute(
-                "DELETE FROM document_tags WHERE document_id=? AND origin='ai'", (document_id,)
-            )
-            connection.execute(
-                "DELETE FROM document_topics WHERE document_id=? AND origin='ai'", (document_id,)
-            )
-            for kind, table, join_table, values in (
-                ("tag", "tags", "document_tags", payload["tags"]),
-                ("topic", "topics", "document_topics", payload["topics"]),
-            ):
-                id_column = f"{kind}_id"
-                for label in values:
-                    normalized = label["name"].strip().casefold()
-                    connection.execute(
-                        f"INSERT OR IGNORE INTO {table}(normalized_name, display_name) VALUES (?, ?)",
-                        (normalized, label["name"].strip()),
-                    )
-                    label_id = connection.execute(
-                        f"SELECT id FROM {table} WHERE normalized_name=?", (normalized,)
-                    ).fetchone()[0]
-                    connection.execute(
-                        f"""INSERT OR REPLACE INTO {join_table}
+    def _project(
+        connection: sqlite3.Connection,
+        search: SearchIndex,
+        document_id: int,
+        derivation_id: str,
+        payload,
+    ) -> None:
+        connection.execute(
+            "DELETE FROM document_tags WHERE document_id=? AND origin='ai'", (document_id,)
+        )
+        connection.execute(
+            "DELETE FROM document_topics WHERE document_id=? AND origin='ai'", (document_id,)
+        )
+        for kind, table, join_table, values in (
+            ("tag", "tags", "document_tags", payload["tags"]),
+            ("topic", "topics", "document_topics", payload["topics"]),
+        ):
+            id_column = f"{kind}_id"
+            for label in values:
+                normalized = label["name"].strip().casefold()
+                connection.execute(
+                    f"INSERT OR IGNORE INTO {table}(normalized_name, display_name) VALUES (?, ?)",
+                    (normalized, label["name"].strip()),
+                )
+                label_id = connection.execute(
+                    f"SELECT id FROM {table} WHERE normalized_name=?", (normalized,)
+                ).fetchone()[0]
+                connection.execute(
+                    f"""INSERT OR REPLACE INTO {join_table}
                             (document_id, {id_column}, origin, confidence, derivation_id)
                             VALUES (?, ?, 'ai', ?, ?)""",
-                        (document_id, label_id, label["confidence"], derivation_id),
-                    )
+                    (document_id, label_id, label["confidence"], derivation_id),
+                )
         search.update_derived_projection(
             document_id, summary=payload["summary"],
             tags=tuple(item["name"] for item in payload["tags"]),
+            commit=False,
         )
 
     def _restore_projection_and_succeed(self, queue: JobQueue, search: SearchIndex, job: Job) -> None:
@@ -203,8 +213,14 @@ class DerivationPipeline:
                AND input_hash=? AND prompt_version=? AND status='accepted'""",
             (job.document_id, job.input_hash, ARTICLE_PROMPT_VERSION),
         ).fetchone()
-        self._project(search, job.document_id, row["id"], json.loads(row["payload_json"]))
-        queue.succeed(job.id, self.worker_id)
+        payload = json.loads(row["payload_json"])
+        queue.publish_and_succeed(
+            job.id,
+            self.worker_id,
+            lambda connection: self._project(
+                connection, search, job.document_id, row["id"], payload
+            ),
+        )
 
     def _append_log(
         self, job: Job, derivation_id: str | None, status: str, error_code: str | None = None
