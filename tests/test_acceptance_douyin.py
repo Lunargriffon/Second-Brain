@@ -8,7 +8,7 @@ from pkb.douyin.media import MediaPaths
 from pkb.douyin.models import FavoriteItem, TranscriptSegment
 from pkb.douyin.pipeline import DouyinPipeline, DurableJsonlStore, MediaInfo
 from pkb.douyin.transcription import TranscriptResult
-from pkb.douyin.live import OpenCliFavoritesBrowser, write_audit_atomic
+from pkb.douyin.live import OpenCliFavoritesBrowser, YtDlpAcquirer, write_audit_atomic
 from pkb.knowledge.indexer import KnowledgeIndexer
 from pkb.knowledge.repository import KnowledgeRepository
 from pkb.knowledge.search import SearchIndex
@@ -113,3 +113,25 @@ def test_browser_stops_pagination_when_scroll_reveals_no_new_favorites():
     assert browser.executable == (shutil.which("opencli") or "opencli")
     assert browser.page(None).cursor == "1"
     assert browser.page("1").cursor is None
+
+
+def test_downloader_falls_back_to_opencli_media_url_when_chrome_dpapi_fails(tmp_path):
+    calls = []
+
+    def runner(command, **_kwargs):
+        calls.append(command)
+        if command[0] == "yt-dlp" and "--cookies-from-browser" in command:
+            raise subprocess.CalledProcessError(1, command, stderr="Failed to decrypt with DPAPI")
+        if command[0] == "opencli" and "eval" in command:
+            return subprocess.CompletedProcess(command, 0, "https://cdn.example/video.mp4", "")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    favorite = _favorites()[0]
+    destination = tmp_path / "video.mp4"
+    YtDlpAcquirer(runner=runner, opencli_executable="opencli").acquire(favorite, destination)
+
+    assert calls[1][:4] == ["opencli", "browser", "pkb-douyin-media", "open"]
+    assert calls[2][:4] == ["opencli", "browser", "pkb-douyin-media", "eval"]
+    assert calls[3][0] == "yt-dlp"
+    assert "https://cdn.example/video.mp4" in calls[3]
+    assert f"Referer:{favorite.url}" in calls[3]

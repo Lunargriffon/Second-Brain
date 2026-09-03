@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import subprocess
 from typing import Any, Callable, Mapping
+from urllib.parse import urlparse
 
 from .collector import CollectionStopped, FavoritePage, FavoritesCollector
 from .manifest import ManifestStore
@@ -119,8 +120,11 @@ class OpenCliFavoritesBrowser:
 
 
 class YtDlpAcquirer:
-    def __init__(self, *, runner: Runner = subprocess.run) -> None:
+    def __init__(
+        self, *, runner: Runner = subprocess.run, opencli_executable: str | None = None
+    ) -> None:
         self.runner = runner
+        self.opencli_executable = opencli_executable or shutil.which("opencli") or "opencli"
 
     def acquire(self, favorite: FavoriteItem, destination: Path) -> None:
         command = [
@@ -133,12 +137,41 @@ class YtDlpAcquirer:
             raise AcquisitionFailure("downloader_unavailable") from None
         except subprocess.CalledProcessError as exc:
             detail = str(exc.stderr).lower()
+            if "dpapi" in detail or "could not copy chrome cookie database" in detail:
+                self._acquire_from_opencli(favorite, destination)
+                return
             code = "http_429" if "429" in detail else "http_403" if "403" in detail else (
                 "auth_required" if "login" in detail or "cookie" in detail else
                 "unavailable" if "unavailable" in detail or "not found" in detail else
                 "download_failed"
             )
             raise AcquisitionFailure(code) from None
+
+    def _acquire_from_opencli(self, favorite: FavoriteItem, destination: Path) -> None:
+        session = "pkb-douyin-media"
+        javascript = "document.querySelector('video')?.currentSrc||document.querySelector('video')?.src||''"
+        try:
+            self.runner(
+                [self.opencli_executable, "browser", session, "open", favorite.url],
+                check=True, capture_output=True, text=True,
+            )
+            result = self.runner(
+                [self.opencli_executable, "browser", session, "eval", javascript],
+                check=True, capture_output=True, text=True,
+            )
+            media_url = result.stdout.strip()
+            parsed = urlparse(media_url)
+            if parsed.scheme != "https" or not parsed.netloc:
+                raise AcquisitionFailure("media_url_unavailable")
+            self.runner(
+                ["yt-dlp", "--add-header", f"Referer:{favorite.url}", "--no-playlist",
+                 "--max-filesize", "2G", "-o", str(destination), media_url],
+                check=True, capture_output=True, text=True,
+            )
+        except FileNotFoundError:
+            raise AcquisitionFailure("downloader_unavailable") from None
+        except subprocess.CalledProcessError:
+            raise AcquisitionFailure("browser_media_failed") from None
 
 
 def probe_audio(paths: Any, *, runner: Runner = subprocess.run) -> MediaInfo:
