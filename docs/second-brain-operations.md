@@ -40,6 +40,11 @@ python -m pip install -e ".[dev,search,douyin]"
 pkb export douyin-favorites --limit 20 --request-delay 7
 ```
 
+On Windows, keep Chrome open with the OpenCLI extension connected. When Chrome
+cookie copying is blocked by DPAPI or an in-use cookie database, the downloader
+uses the authenticated browser tab and its captured Douyin detail response. It
+does not export or persist browser cookies.
+
 The command never accepts more than 20 items and never accepts a request delay
 below five seconds. Video and WAV files live under the operating-system temporary
 directory and are deleted only after the transcript JSONL has been flushed to
@@ -72,6 +77,22 @@ Search is local and lexical by default:
 pkb search "知识管理" --db data/index/knowledge.db --limit 10 --format json
 pkb search "检索" --db data/index/knowledge.db --source zhihu --collection 123 --limit 10
 ```
+
+When the saved `ZHIHU_COOKIE` is expired but Chrome is already authenticated,
+use the explicit browser-session path. The existing Cookie path remains the
+default:
+
+```powershell
+pkb export zhihu-batch `
+  --collections-file data/config/zhihu-collections.txt `
+  --output-dir data/raw `
+  --state-dir data/state `
+  --limit 0 `
+  --browser-session
+```
+
+Chrome and the OpenCLI extension must remain open for the duration of this
+command. OpenCLI is used read-only; cookies are never written to project files.
 
 Limits must be positive. Search results are projections; rebuild them from the
 database and evidence instead of editing them.

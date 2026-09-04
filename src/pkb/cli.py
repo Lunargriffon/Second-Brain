@@ -21,6 +21,7 @@ from pkb.images import download_zhihu_images, download_zhihu_triage_images
 from pkb.jsonl import JsonlWriter
 from pkb.verify import verify_zhihu_exports
 from pkb.zhihu import FakeZhihuClient, RealZhihuClient, ZhihuClientError
+from pkb.zhihu_opencli import OpenCliZhihuClient
 
 
 def main(argv: Sequence[str] | None = None, *, provider: DerivationProvider | None = None) -> int:
@@ -128,6 +129,7 @@ def _build_parser() -> argparse.ArgumentParser:
     zhihu_parser.add_argument("--limit", type=int, default=5)
     zhihu_parser.add_argument("--request-delay", type=float, default=2.0)
     zhihu_parser.add_argument("--max-retry", type=int, default=3)
+    zhihu_parser.add_argument("--browser-session", action="store_true")
 
     zhihu_author_parser = export_subparsers.add_parser("zhihu-author")
     zhihu_author_parser.add_argument("--author-url", required=True)
@@ -149,6 +151,7 @@ def _build_parser() -> argparse.ArgumentParser:
     batch_parser.add_argument("--limit", type=int, default=5)
     batch_parser.add_argument("--request-delay", type=float, default=2.0)
     batch_parser.add_argument("--max-retry", type=int, default=3)
+    batch_parser.add_argument("--browser-session", action="store_true")
 
     douyin_parser = export_subparsers.add_parser("douyin-favorites")
     douyin_parser.add_argument("--output", default="data/raw/douyin-favorites.jsonl")
@@ -352,10 +355,15 @@ def _add_review_parsers(subparsers: argparse._SubParsersAction) -> None:
     mark.add_argument("--date")
 
 
-def _build_zhihu_client(args: argparse.Namespace) -> FakeZhihuClient | RealZhihuClient:
+def _build_zhihu_client(
+    args: argparse.Namespace,
+) -> FakeZhihuClient | RealZhihuClient | OpenCliZhihuClient:
     fixture = getattr(args, "fixture", None)
     if fixture:
         return FakeZhihuClient(Path(fixture))
+    max_items = None if args.limit == 0 else args.limit
+    if getattr(args, "browser_session", False):
+        return OpenCliZhihuClient(max_items=max_items)
     cookie = args.cookie
     if cookie is None:
         try:
@@ -363,7 +371,6 @@ def _build_zhihu_client(args: argparse.Namespace) -> FakeZhihuClient | RealZhihu
             cookie = config.zhihu_cookie
         except ConfigError:
             cookie = ""
-    max_items = None if args.limit == 0 else args.limit
     return RealZhihuClient(
         cookie=cookie,
         request_delay=args.request_delay,

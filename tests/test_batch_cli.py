@@ -1,6 +1,7 @@
 import json
 
-from pkb.cli import main
+from pkb.cli import _build_parser, _build_zhihu_client, main
+from pkb.zhihu_opencli import OpenCliZhihuClient
 
 
 def test_cli_exports_zhihu_batch_from_plain_url_file(tmp_path):
@@ -59,6 +60,16 @@ def test_cli_rejects_batch_file_with_no_collection_urls(tmp_path):
     )
 
     assert exit_code == 1
+
+
+def test_cli_selects_browser_backed_zhihu_client_explicitly():
+    args = _build_parser().parse_args([
+        "export", "zhihu-batch", "--collections-file", "collections.txt",
+        "--browser-session", "--limit", "0",
+    ])
+    client = _build_zhihu_client(args)
+    assert isinstance(client, OpenCliZhihuClient)
+    assert client.max_items is None
 
 
 def test_cli_audits_zhihu_collections_file_with_fake_fixture(tmp_path):
