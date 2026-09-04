@@ -124,14 +124,57 @@ def test_downloader_falls_back_to_opencli_media_url_when_chrome_dpapi_fails(tmp_
             raise subprocess.CalledProcessError(1, command, stderr="Failed to decrypt with DPAPI")
         if command[0] == "opencli" and "eval" in command:
             return subprocess.CompletedProcess(command, 0, "https://cdn.example/video.mp4", "")
+        if command[0] == "opencli" and "network" in command:
+            return subprocess.CompletedProcess(command, 0, '{"entries":[]}', "")
+        if command[0] == "opencli" and "open" in command:
+            return subprocess.CompletedProcess(command, 0, '{"page":"tab-1"}', "")
         return subprocess.CompletedProcess(command, 0, "", "")
 
     favorite = _favorites()[0]
     destination = tmp_path / "video.mp4"
     YtDlpAcquirer(runner=runner, opencli_executable="opencli").acquire(favorite, destination)
 
-    assert calls[1][:4] == ["opencli", "browser", "pkb-douyin-media", "open"]
-    assert calls[2][:4] == ["opencli", "browser", "pkb-douyin-media", "eval"]
-    assert calls[3][0] == "yt-dlp"
-    assert "https://cdn.example/video.mp4" in calls[3]
-    assert f"Referer:{favorite.url}" in calls[3]
+    assert calls[1][:5] == ["opencli", "browser", "pkb-douyin-media", "open", "about:blank"]
+    assert any(command[:4] == ["opencli", "browser", "pkb-douyin-media", "eval"] for command in calls)
+    assert calls[-1][0] == "yt-dlp"
+    assert "https://cdn.example/video.mp4" in calls[-1]
+    assert f"Referer:{favorite.url}" in calls[-1]
+
+
+def test_downloader_extracts_https_media_from_captured_detail_for_blob_video(tmp_path):
+    calls = []
+    favorite = _favorites()[0]
+
+    def runner(command, **_kwargs):
+        calls.append(command)
+        if command[0] == "yt-dlp" and "--cookies-from-browser" in command:
+            raise subprocess.CalledProcessError(1, command, stderr="Failed to decrypt with DPAPI")
+        if command[0] == "opencli" and command[3:5] == ["open", "about:blank"]:
+            return subprocess.CompletedProcess(command, 0, '{"page":"tab-1"}', "")
+        if command[0] == "opencli" and "eval" in command:
+            return subprocess.CompletedProcess(command, 0, "blob:https://www.douyin.com/id", "")
+        if command[0] == "opencli" and "--detail" in command:
+            body = {
+                "key": "detail",
+                "body": {
+                    "aweme_detail": {
+                        "aweme_id": favorite.work_id,
+                        "video": {"play_addr": {"url_list": ["https://cdn.example/blob.mp4"]}},
+                    }
+                },
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(body), "")
+        if command[0] == "opencli" and "network" in command:
+            payload = {"entries": [{"key": "GET www.douyin.com/aweme/v1/web/aweme/detail/"}]}
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+        if command[0] == "opencli" and "open" in command:
+            return subprocess.CompletedProcess(command, 0, '{"page":"tab-1"}', "")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    YtDlpAcquirer(runner=runner, opencli_executable="opencli").acquire(
+        favorite, tmp_path / "video.mp4"
+    )
+
+    direct_download = calls[-1]
+    assert "https://cdn.example/blob.mp4" in direct_download
+    assert f"Referer:{favorite.url}" in direct_download

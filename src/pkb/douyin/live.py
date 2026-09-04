@@ -17,6 +17,7 @@ from .media import AcquisitionFailure, TemporaryMedia
 from .models import FavoriteItem
 from .pipeline import DouyinPipeline, DurableJsonlStore, MediaInfo, RunAudit
 from .transcription import FallbackTranscriber, FasterWhisperEngine, SenseVoiceEngine
+from pkb.opencli_gateway import OpenCliError, OpenCliGateway
 
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
@@ -150,28 +151,64 @@ class YtDlpAcquirer:
     def _acquire_from_opencli(self, favorite: FavoriteItem, destination: Path) -> None:
         session = "pkb-douyin-media"
         javascript = "document.querySelector('video')?.currentSrc||document.querySelector('video')?.src||''"
+        gateway = OpenCliGateway(runner=self.runner, executable=self.opencli_executable)
         try:
-            self.runner(
-                [self.opencli_executable, "browser", session, "open", favorite.url],
-                check=True, capture_output=True, text=True,
-            )
+            opened = gateway.run_json(["browser", session, "open", "about:blank"])
+            tab = opened.get("page") if isinstance(opened, Mapping) else None
+            if not isinstance(tab, str) or not tab:
+                raise AcquisitionFailure("browser_media_failed")
+            gateway.run_json(["browser", session, "network", "--tab", tab])
+            gateway.run_json(["browser", session, "open", "--tab", tab, favorite.url])
             result = self.runner(
-                [self.opencli_executable, "browser", session, "eval", javascript],
-                check=True, capture_output=True, text=True,
+                [self.opencli_executable, "browser", session, "eval", "--tab", tab, javascript],
+                check=True, capture_output=True, text=True, encoding="utf-8", errors="replace",
             )
             media_url = result.stdout.strip()
             parsed = urlparse(media_url)
             if parsed.scheme != "https" or not parsed.netloc:
-                raise AcquisitionFailure("media_url_unavailable")
+                media_url = self._captured_media_url(gateway, session, tab, favorite.work_id)
             self.runner(
                 ["yt-dlp", "--add-header", f"Referer:{favorite.url}", "--no-playlist",
                  "--max-filesize", "2G", "-o", str(destination), media_url],
-                check=True, capture_output=True, text=True,
+                check=True, capture_output=True, text=True, encoding="utf-8", errors="replace",
             )
         except FileNotFoundError:
             raise AcquisitionFailure("downloader_unavailable") from None
         except subprocess.CalledProcessError:
             raise AcquisitionFailure("browser_media_failed") from None
+        except OpenCliError as exc:
+            raise AcquisitionFailure(str(exc)) from None
+
+    @staticmethod
+    def _captured_media_url(
+        gateway: OpenCliGateway, session: str, tab: str, work_id: str
+    ) -> str:
+        capture = gateway.run_json(["browser", session, "network", "--tab", tab])
+        entries = capture.get("entries") if isinstance(capture, Mapping) else None
+        if not isinstance(entries, list):
+            raise AcquisitionFailure("media_url_unavailable")
+        keys = [
+            entry.get("key") for entry in entries
+            if isinstance(entry, Mapping)
+            and isinstance(entry.get("key"), str)
+            and "/aweme/detail" in str(entry.get("key"))
+        ]
+        for key in reversed(keys):
+            detail = gateway.run_json(["browser", session, "network", "--detail", key])
+            body = detail.get("body") if isinstance(detail, Mapping) else None
+            aweme = body.get("aweme_detail") if isinstance(body, Mapping) else None
+            if not isinstance(aweme, Mapping) or str(aweme.get("aweme_id")) != work_id:
+                continue
+            video = aweme.get("video")
+            play = video.get("play_addr") if isinstance(video, Mapping) else None
+            urls = play.get("url_list") if isinstance(play, Mapping) else None
+            if isinstance(urls, list):
+                for value in urls:
+                    if isinstance(value, str):
+                        parsed = urlparse(value)
+                        if parsed.scheme == "https" and parsed.netloc:
+                            return value
+        raise AcquisitionFailure("media_url_unavailable")
 
 
 def probe_audio(paths: Any, *, runner: Runner = subprocess.run) -> MediaInfo:
