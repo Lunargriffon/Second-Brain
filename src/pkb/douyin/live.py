@@ -149,11 +149,13 @@ class YtDlpAcquirer:
             raise AcquisitionFailure(code) from None
 
     def _acquire_from_opencli(self, favorite: FavoriteItem, destination: Path) -> None:
-        session = "pkb-douyin-media"
+        session = f"pkb-douyin-media-{favorite.work_id}"
         javascript = "document.querySelector('video')?.currentSrc||document.querySelector('video')?.src||''"
         gateway = OpenCliGateway(runner=self.runner, executable=self.opencli_executable)
         try:
-            opened = gateway.run_json(["browser", session, "open", "about:blank"])
+            opened = gateway.run_json(
+                ["browser", session, "open", "https://www.douyin.com/"]
+            )
             tab = opened.get("page") if isinstance(opened, Mapping) else None
             if not isinstance(tab, str) or not tab:
                 raise AcquisitionFailure("browser_media_failed")
@@ -178,36 +180,49 @@ class YtDlpAcquirer:
             raise AcquisitionFailure("browser_media_failed") from None
         except OpenCliError as exc:
             raise AcquisitionFailure(str(exc)) from None
+        finally:
+            try:
+                self.runner(
+                    [self.opencli_executable, "browser", session, "close"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+            except OSError:
+                pass
 
     @staticmethod
     def _captured_media_url(
         gateway: OpenCliGateway, session: str, tab: str, work_id: str
     ) -> str:
-        capture = gateway.run_json(["browser", session, "network", "--tab", tab])
-        entries = capture.get("entries") if isinstance(capture, Mapping) else None
-        if not isinstance(entries, list):
-            raise AcquisitionFailure("media_url_unavailable")
-        keys = [
-            entry.get("key") for entry in entries
-            if isinstance(entry, Mapping)
-            and isinstance(entry.get("key"), str)
-            and "/aweme/detail" in str(entry.get("key"))
-        ]
-        for key in reversed(keys):
-            detail = gateway.run_json(["browser", session, "network", "--detail", key])
-            body = detail.get("body") if isinstance(detail, Mapping) else None
-            aweme = body.get("aweme_detail") if isinstance(body, Mapping) else None
-            if not isinstance(aweme, Mapping) or str(aweme.get("aweme_id")) != work_id:
+        for _attempt in range(3):
+            capture = gateway.run_json(["browser", session, "network", "--tab", tab])
+            entries = capture.get("entries") if isinstance(capture, Mapping) else None
+            if not isinstance(entries, list):
                 continue
-            video = aweme.get("video")
-            play = video.get("play_addr") if isinstance(video, Mapping) else None
-            urls = play.get("url_list") if isinstance(play, Mapping) else None
-            if isinstance(urls, list):
-                for value in urls:
-                    if isinstance(value, str):
-                        parsed = urlparse(value)
-                        if parsed.scheme == "https" and parsed.netloc:
-                            return value
+            keys = [
+                entry.get("key") for entry in entries
+                if isinstance(entry, Mapping)
+                and isinstance(entry.get("key"), str)
+                and "/aweme/detail" in str(entry.get("key"))
+            ]
+            for key in reversed(keys):
+                detail = gateway.run_json(["browser", session, "network", "--detail", key])
+                body = detail.get("body") if isinstance(detail, Mapping) else None
+                aweme = body.get("aweme_detail") if isinstance(body, Mapping) else None
+                if not isinstance(aweme, Mapping) or str(aweme.get("aweme_id")) != work_id:
+                    continue
+                video = aweme.get("video")
+                play = video.get("play_addr") if isinstance(video, Mapping) else None
+                urls = play.get("url_list") if isinstance(play, Mapping) else None
+                if isinstance(urls, list):
+                    for value in urls:
+                        if isinstance(value, str):
+                            parsed = urlparse(value)
+                            if parsed.scheme == "https" and parsed.netloc:
+                                return value
         raise AcquisitionFailure("media_url_unavailable")
 
 
