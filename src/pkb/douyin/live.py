@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import json
 from pathlib import Path
 import shutil
 import subprocess
+import time
 from typing import Any, Callable, Mapping
 from urllib.parse import urlparse
 
-from .collector import CollectionStopped, FavoritePage, FavoritesCollector
+from .collector import CollectionStopped, FavoritePage, FavoritesBrowser, FavoritesCollector
 from .manifest import ManifestStore
 from .media import AcquisitionFailure, TemporaryMedia
 from .models import FavoriteItem
@@ -239,6 +240,84 @@ def probe_audio(paths: Any, *, runner: Runner = subprocess.run) -> MediaInfo:
     return MediaInfo(duration, duration)
 
 
+@dataclass(frozen=True)
+class FullRunAudit:
+    counts: dict[str, int]
+    errors: dict[str, int]
+    stopped: bool
+    cleanup_pending: int
+    discovered: int
+    discovery_complete: bool
+    index_refreshed: bool = False
+    wiki_refreshed: bool = False
+
+
+def _build_pipeline(
+    manifest: ManifestStore, output: Path, temp_root: Path
+) -> DouyinPipeline:
+    return DouyinPipeline(
+        manifest=manifest,
+        raw_store=DurableJsonlStore(output),
+        media=TemporaryMedia(temp_root),
+        acquirer=YtDlpAcquirer(),
+        transcriber=FallbackTranscriber(SenseVoiceEngine(), FasterWhisperEngine()),
+        probe=probe_audio,
+    )
+
+
+def run_live_full(
+    *,
+    output: Path,
+    state: Path,
+    report: Path,
+    temp_root: Path,
+    request_delay: float,
+    browser: FavoritesBrowser | None = None,
+    delay: Callable[[float], None] = time.sleep,
+    pipeline_factory: Callable[[ManifestStore], DouyinPipeline] | None = None,
+) -> FullRunAudit:
+    manifest = ManifestStore(state)
+    known = {item.work_id for item in manifest.items()}
+    collector = FavoritesCollector(
+        browser or OpenCliFavoritesBrowser(),
+        delay=delay,
+        request_delay=request_delay,
+    )
+    try:
+        discovered = collector.collect_all(
+            known_ids=known,
+            on_discovered=manifest.discover,
+        )
+        pipeline = (
+            pipeline_factory(manifest)
+            if pipeline_factory is not None
+            else _build_pipeline(manifest, output, temp_root)
+        )
+        run = pipeline.run()
+        audit = FullRunAudit(
+            counts=run.counts,
+            errors=run.errors,
+            stopped=run.stopped,
+            cleanup_pending=run.cleanup_pending,
+            discovered=len(discovered),
+            discovery_complete=True,
+        )
+    except CollectionStopped as exc:
+        audit = FullRunAudit(
+            counts={"selected": 0},
+            errors={exc.code: 1},
+            stopped=True,
+            cleanup_pending=sum(
+                item.stage.value in {"persisted", "indexed"}
+                for item in manifest.items()
+            ),
+            discovered=0,
+            discovery_complete=False,
+        )
+    write_audit_atomic(report, asdict(audit))
+    return audit
+
+
 def run_live_trial(
     *, output: Path, state: Path, report: Path, temp_root: Path,
     limit: int, request_delay: float,
@@ -254,14 +333,7 @@ def run_live_trial(
                 OpenCliFavoritesBrowser(), request_delay=request_delay
             ).collect(limit=limit)
             manifest.discover(discovered)
-        pipeline = DouyinPipeline(
-            manifest=manifest,
-            raw_store=DurableJsonlStore(output),
-            media=TemporaryMedia(temp_root),
-            acquirer=YtDlpAcquirer(),
-            transcriber=FallbackTranscriber(SenseVoiceEngine(), FasterWhisperEngine()),
-            probe=probe_audio,
-        )
+        pipeline = _build_pipeline(manifest, output, temp_root)
         audit = pipeline.run()
     except CollectionStopped as exc:
         audit = RunAudit(

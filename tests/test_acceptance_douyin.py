@@ -6,9 +6,14 @@ import subprocess
 from pkb.douyin.manifest import ManifestStore
 from pkb.douyin.media import MediaPaths
 from pkb.douyin.models import FavoriteItem, TranscriptSegment
-from pkb.douyin.pipeline import DouyinPipeline, DurableJsonlStore, MediaInfo
+from pkb.douyin.pipeline import DouyinPipeline, DurableJsonlStore, MediaInfo, RunAudit
 from pkb.douyin.transcription import TranscriptResult
-from pkb.douyin.live import OpenCliFavoritesBrowser, YtDlpAcquirer, write_audit_atomic
+from pkb.douyin.live import (
+    OpenCliFavoritesBrowser,
+    YtDlpAcquirer,
+    run_live_full,
+    write_audit_atomic,
+)
 from pkb.knowledge.indexer import KnowledgeIndexer
 from pkb.knowledge.repository import KnowledgeRepository
 from pkb.knowledge.search import SearchIndex
@@ -58,6 +63,69 @@ def _favorites() -> list[FavoriteItem]:
         )
         for number in range(1, 21)
     ]
+
+
+class FullRunBrowser:
+    def __init__(self, pages):
+        self.pages = iter(pages)
+
+    def page(self, _cursor):
+        from pkb.douyin.collector import FavoritePage
+
+        values = next(self.pages)
+        return FavoritePage(
+            tuple(
+                {
+                    "aweme_id": value.work_id,
+                    "share_url": value.url,
+                    "author": {"uid": value.author_id, "nickname": value.author},
+                }
+                for value in values
+            ),
+            str(len(values)),
+            "2026-09-05T00:00:00Z",
+        )
+
+
+class RecordingPipeline:
+    def __init__(self, manifest, events):
+        self.manifest = manifest
+        self.events = events
+
+    def run(self):
+        self.events.append(("pipeline", [item.work_id for item in self.manifest.items()]))
+        return RunAudit({"selected": 3}, {}, False, 0)
+
+
+def test_full_run_checkpoints_discovery_before_processing(tmp_path):
+    events = []
+    favorites = _favorites()[:3]
+    browser = FullRunBrowser([
+        favorites[:2],
+        favorites,
+        favorites,
+        favorites,
+        favorites,
+    ])
+    state = tmp_path / "state.json"
+    manifest = ManifestStore(state)
+    manifest.discover(favorites[:1])
+
+    audit = run_live_full(
+        output=tmp_path / "raw.jsonl",
+        state=state,
+        report=tmp_path / "audit.json",
+        temp_root=tmp_path / "media",
+        request_delay=7,
+        browser=browser,
+        pipeline_factory=lambda store: RecordingPipeline(store, events),
+        delay=lambda _seconds: None,
+    )
+
+    assert events == [("pipeline", ["1", "2", "3"])]
+    assert [item.work_id for item in manifest.items()] == ["1", "2", "3"]
+    assert audit.discovery_complete is True
+    assert audit.discovered == 2
 
 
 def test_offline_douyin_trial_is_resumable_searchable_and_clean(tmp_path):
