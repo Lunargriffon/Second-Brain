@@ -243,6 +243,8 @@ def test_browser_reads_all_favorite_links_after_wait_and_excludes_footer():
             if "scrollTo" in script:
                 return subprocess.CompletedProcess(command, 0, "true", "")
             assert "document.links" in script
+            assert "&&" not in script
+            assert "=>" not in script
             assert "closest('ul')" in script
             assert "closest('footer')" in script
             return subprocess.CompletedProcess(command, 0, json.dumps(favorite_links), "")

@@ -60,10 +60,11 @@ class OpenCliFavoritesBrowser:
 
         self._run([self.executable, "browser", self.session, "wait", "time", "2"])
         script = (
-            "[...document.links]"
-            ".filter(link=>link.href.includes('/video/')&&link.closest('ul')"
-            "&&!link.closest('footer'))"
-            ".map(link=>link.href)"
+            "Array.from(document.links)"
+            ".filter(function(link){return link.href.includes('/video/');})"
+            ".filter(function(link){return link.closest('ul');})"
+            ".filter(function(link){return link.closest('footer')===null;})"
+            ".map(function(link){return link.href;})"
         )
         completed = self._run(
             [self.executable, "browser", self.session, "eval", script]
