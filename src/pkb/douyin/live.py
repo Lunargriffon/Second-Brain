@@ -56,7 +56,13 @@ class OpenCliFavoritesBrowser:
             self._run([self.executable, "browser", self.session, "open", self.FAVORITES_URL])
             self.opened = True
         elif cursor is not None:
-            self._run([self.executable, "browser", self.session, "eval", "window.scrollTo(0,document.body.scrollHeight); true"])
+            scroll_script = (
+                "var root=document.querySelector('.route-scroll-container');"
+                "if(root){root.scrollTop=root.scrollHeight;}true"
+            )
+            self._run(
+                [self.executable, "browser", self.session, "eval", scroll_script]
+            )
 
         self._run([self.executable, "browser", self.session, "wait", "time", "2"])
         script = (

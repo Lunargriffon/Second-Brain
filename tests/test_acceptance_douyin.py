@@ -258,6 +258,11 @@ def test_browser_reads_all_favorite_links_after_wait_and_excludes_footer():
     assert all(item["share_url"] != footer_link for item in first.items)
     reads = [index for index, call in enumerate(calls) if "document.links" in call[-1]]
     waits = [index for index, call in enumerate(calls) if "wait" in call and "time" in call]
+    scrolls = [call[-1] for call in calls if "scrollTo" in call[-1]]
+    assert scrolls == [
+        "var root=document.querySelector('.route-scroll-container');"
+        "if(root){root.scrollTop=root.scrollHeight;}true"
+    ]
     assert len(waits) == 2
     assert waits[0] < reads[0]
     assert waits[1] < reads[1]
