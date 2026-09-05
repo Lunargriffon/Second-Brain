@@ -65,9 +65,22 @@ pkb index build --raw-dir data/raw --db data/index/knowledge.db --strict
 pkb search "口述内容中的短语" --db data/index/knowledge.db --source douyin
 ```
 
-Before approving any full-library import, inspect the 20-item audit and manually
-compare five speech-bearing transcripts with their source videos. Full-library
-pagination requires a separate reviewed plan; do not raise the trial limit.
+Before running a full-library import, inspect the 20-item audit and manually
+compare five speech-bearing transcripts with their source videos. Then start the
+explicit full mode:
+
+```powershell
+pkb export douyin-favorites --all --request-delay 7
+```
+
+Full mode repeatedly scrolls the authenticated favorites page and considers
+discovery complete only after three consecutive observations add no new work.
+It checkpoints each newly discovered batch before processing, skips already
+cleaned items, and does not delete existing raw records. If the process is
+interrupted or reports a safe stop signal, resolve the visible login, challenge,
+or rate-limit condition and rerun the identical command. Once processing
+finishes without a stop signal, full mode rebuilds the strict knowledge index
+and refreshes the generated Wiki projection.
 
 ## Search
 

@@ -73,6 +73,14 @@ def test_operations_guide_covers_bounded_douyin_trial_and_recovery():
         assert required in text
 
 
+def test_operations_guide_covers_full_douyin_sync_and_recovery():
+    text = OPERATIONS_GUIDE.read_text(encoding="utf-8")
+
+    assert "pkb export douyin-favorites --all --request-delay 7" in text
+    assert "three consecutive" in text
+    assert "does not delete existing raw records" in text
+
+
 def test_readme_links_shipped_guides_and_has_clean_workflow():
     text = README.read_text(encoding="utf-8")
 
