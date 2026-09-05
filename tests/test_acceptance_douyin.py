@@ -14,6 +14,7 @@ from pkb.douyin.live import (
     run_live_full,
     write_audit_atomic,
 )
+from pkb.douyin.collector import CollectionStopped, FavoritePage
 from pkb.knowledge.indexer import KnowledgeIndexer
 from pkb.knowledge.repository import KnowledgeRepository
 from pkb.knowledge.search import SearchIndex
@@ -128,6 +129,51 @@ def test_full_run_checkpoints_discovery_before_processing(tmp_path):
     assert audit.discovered == 2
 
 
+def test_full_run_reports_checkpointed_discovery_when_collection_stops(tmp_path):
+    favorites = _favorites()[:2]
+
+    class StoppingBrowser:
+        def __init__(self):
+            self.calls = 0
+
+        def page(self, _cursor):
+            self.calls += 1
+            if self.calls == 2:
+                raise CollectionStopped("http_429")
+            favorite = favorites[1]
+            return FavoritePage(
+                ({
+                    "aweme_id": favorite.work_id,
+                    "share_url": favorite.url,
+                    "author": {"uid": favorite.author_id, "nickname": favorite.author},
+                },),
+                "1",
+                "2026-09-05T00:00:00Z",
+            )
+
+    state = tmp_path / "state.json"
+    manifest = ManifestStore(state)
+    manifest.discover(favorites[:1])
+
+    audit = run_live_full(
+        output=tmp_path / "raw.jsonl",
+        state=state,
+        report=tmp_path / "audit.json",
+        temp_root=tmp_path / "media",
+        request_delay=7,
+        browser=StoppingBrowser(),
+        pipeline_factory=lambda _store: (_ for _ in ()).throw(
+            AssertionError("pipeline must not run before discovery completes")
+        ),
+        delay=lambda _seconds: None,
+    )
+
+    assert [item.work_id for item in manifest.items()] == ["1", "2"]
+    assert audit.discovered == 1
+    assert audit.discovery_complete is False
+    assert audit.counts["selected"] == 0
+
+
 def test_offline_douyin_trial_is_resumable_searchable_and_clean(tmp_path):
     raw_dir = tmp_path / "raw"
     temp_root = tmp_path / "temp"
@@ -171,7 +217,7 @@ def test_live_audit_is_replaced_atomically_without_private_details(tmp_path):
 
 
 def test_browser_stops_pagination_when_scroll_reveals_no_new_favorites():
-    payload = json.dumps({"entries": [{"attrs": {"href": "https://www.douyin.com/video/7"}}]})
+    payload = json.dumps(["https://www.douyin.com/video/7"])
 
     def runner(command, **_kwargs):
         output = json.dumps({"logged_in": True}) if "whoami" in command else ("" if "open" in command else payload)
@@ -181,6 +227,38 @@ def test_browser_stops_pagination_when_scroll_reveals_no_new_favorites():
     assert browser.executable == (shutil.which("opencli") or "opencli")
     assert browser.page(None).cursor == "1"
     assert browser.page("1").cursor is None
+
+
+def test_browser_reads_all_favorite_links_after_wait_and_excludes_footer():
+    calls = []
+    favorite_links = [f"https://www.douyin.com/video/{number}" for number in range(1, 602)]
+    footer_link = "https://www.douyin.com/video/999999"
+
+    def runner(command, **_kwargs):
+        calls.append(command)
+        if "whoami" in command:
+            return subprocess.CompletedProcess(command, 0, json.dumps({"logged_in": True}), "")
+        if "eval" in command:
+            script = command[-1]
+            if "scrollTo" in script:
+                return subprocess.CompletedProcess(command, 0, "true", "")
+            assert "document.links" in script
+            assert "closest('ul')" in script
+            assert "closest('footer')" in script
+            return subprocess.CompletedProcess(command, 0, json.dumps(favorite_links), "")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    browser = OpenCliFavoritesBrowser(runner=runner)
+    first = browser.page(None)
+    browser.page(first.cursor)
+
+    assert len(first.items) == 601
+    assert all(item["share_url"] != footer_link for item in first.items)
+    reads = [index for index, call in enumerate(calls) if "document.links" in call[-1]]
+    waits = [index for index, call in enumerate(calls) if "wait" in call and "time" in call]
+    assert len(waits) == 2
+    assert waits[0] < reads[0]
+    assert waits[1] < reads[1]
 
 
 def test_downloader_falls_back_to_opencli_media_url_when_chrome_dpapi_fails(tmp_path):

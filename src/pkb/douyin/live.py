@@ -58,22 +58,24 @@ class OpenCliFavoritesBrowser:
         elif cursor is not None:
             self._run([self.executable, "browser", self.session, "eval", "window.scrollTo(0,document.body.scrollHeight); true"])
 
-        completed = self._run([
-            self.executable, "browser", self.session, "find",
-            "--css", "a", "--limit", "500", "--text-max", "0",
-        ])
+        self._run([self.executable, "browser", self.session, "wait", "time", "2"])
+        script = (
+            "[...document.links]"
+            ".filter(link=>link.href.includes('/video/')&&link.closest('ul')"
+            "&&!link.closest('footer'))"
+            ".map(link=>link.href)"
+        )
+        completed = self._run(
+            [self.executable, "browser", self.session, "eval", script]
+        )
         try:
             value = json.loads(completed.stdout)
-            if not isinstance(value, Mapping):
+            if not isinstance(value, list):
                 raise ValueError
         except (json.JSONDecodeError, ValueError, TypeError):
             raise CollectionStopped("browser_unavailable") from None
         raw_items = []
-        for entry in value.get("entries", []):
-            if not isinstance(entry, Mapping):
-                continue
-            attrs = entry.get("attrs")
-            link = attrs.get("href") if isinstance(attrs, Mapping) else None
+        for link in value:
             if not isinstance(link, str) or "/video/" not in link:
                 continue
             work_id = link.split("/video/", 1)[1].split("?", 1)[0].split("/", 1)[0]
@@ -311,7 +313,9 @@ def run_live_full(
                 item.stage.value in {"persisted", "indexed"}
                 for item in manifest.items()
             ),
-            discovered=0,
+            discovered=len(
+                {item.work_id for item in manifest.items()} - known
+            ),
             discovery_complete=False,
         )
     write_audit_atomic(report, asdict(audit))
