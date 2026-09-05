@@ -73,6 +73,48 @@ def test_delays_once_between_pages():
     assert delays == [7]
 
 
+def test_collect_all_stops_after_three_no_growth_observations():
+    browser = FakeFavoritesBrowser(
+        pages=[
+            page([1, 2], cursor="2"),
+            page([1, 2, 3], cursor="3"),
+            page([1, 2, 3]),
+            page([1, 2, 3]),
+            page([1, 2, 3]),
+        ]
+    )
+    batches = []
+    delays = []
+
+    result = FavoritesCollector(
+        browser, delay=delays.append, request_delay=7
+    ).collect_all(on_discovered=batches.append)
+
+    assert [item.work_id for item in result] == ["1", "2", "3"]
+    assert [[item.work_id for item in batch] for batch in batches] == [["1", "2"], ["3"]]
+    assert browser.page_calls == 5
+    assert delays == [7, 7, 7, 7]
+
+
+def test_collect_all_deduplicates_ids_already_in_manifest():
+    browser = FakeFavoritesBrowser(
+        pages=[page([1, 2]), page([1, 2]), page([1, 2]), page([1, 2])]
+    )
+    batches = []
+
+    result = FavoritesCollector(browser, delay=lambda _: None).collect_all(
+        known_ids={"1"}, on_discovered=batches.append
+    )
+
+    assert [item.work_id for item in result] == ["2"]
+    assert [[item.work_id for item in batch] for batch in batches] == [["2"]]
+
+
+def test_collect_all_rejects_non_positive_stable_observations():
+    with pytest.raises(ValueError, match="stable observations must be positive"):
+        FavoritesCollector(FakeFavoritesBrowser()).collect_all(stable_observations=0)
+
+
 @pytest.mark.parametrize("request_delay", [4.9, 10.1])
 def test_rejects_delay_outside_safe_range(request_delay):
     with pytest.raises(ValueError, match="5..10"):

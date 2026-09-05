@@ -96,6 +96,43 @@ class FavoritesCollector:
             self.delay(self.request_delay)
         return collected
 
+    def collect_all(
+        self,
+        *,
+        known_ids: set[str] | None = None,
+        on_discovered: Callable[[list[FavoriteItem]], None] | None = None,
+        stable_observations: int = 3,
+    ) -> list[FavoriteItem]:
+        if stable_observations < 1:
+            raise ValueError("stable observations must be positive")
+
+        seen = set(known_ids or ())
+        discovered: list[FavoriteItem] = []
+        cursor: str | None = None
+        unchanged = 0
+        while unchanged < stable_observations:
+            page = self.browser.page(cursor)
+            batch: list[FavoriteItem] = []
+            for raw in page.items:
+                item = _normalize(raw, observed_at=page.observed_at)
+                if item.work_id not in seen:
+                    seen.add(item.work_id)
+                    batch.append(item)
+
+            if batch:
+                discovered.extend(batch)
+                unchanged = 0
+                if on_discovered is not None:
+                    on_discovered(batch)
+            else:
+                unchanged += 1
+
+            if unchanged < stable_observations:
+                cursor = page.cursor or str(len(seen))
+                self.delay(self.request_delay)
+
+        return discovered
+
 
 def _normalize(raw: Mapping[str, object], *, observed_at: str) -> FavoriteItem:
     author_value = raw.get("author", {})
