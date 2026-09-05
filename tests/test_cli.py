@@ -3,6 +3,8 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from pkb.cli import main
 
 
@@ -110,6 +112,134 @@ def test_douyin_trial_defaults_to_twenty_and_external_temp(monkeypatch, tmp_path
         "selected=20 persisted=18 cleaned=18 unavailable=0 failed=0 "
         "cleanup_pending=0 stopped=false errors=media_unavailable:2\n"
     )
+
+
+def test_douyin_all_selects_full_runner(monkeypatch, tmp_path, capsys):
+    captured = {}
+    monkeypatch.setattr(
+        "pkb.cli._refresh_douyin_outputs", lambda: (True, True), raising=False
+    )
+    monkeypatch.setattr(
+        "pkb.cli.run_douyin_full",
+        lambda **kwargs: captured.update(kwargs)
+        or SimpleNamespace(
+            counts={"selected": 3, "persisted": 2, "cleaned": 2},
+            errors={},
+            stopped=False,
+            cleanup_pending=0,
+            discovered=3,
+            discovery_complete=True,
+        ),
+    )
+
+    assert main(
+        [
+            "export",
+            "douyin-favorites",
+            "--all",
+            "--state",
+            str(tmp_path / "state.json"),
+            "--report",
+            str(tmp_path / "audit.json"),
+        ]
+    ) == 0
+
+    assert captured["request_delay"] == 7
+    assert "limit" not in captured
+    assert capsys.readouterr().out == (
+        "selected=3 persisted=2 cleaned=2 unavailable=0 failed=0 "
+        "cleanup_pending=0 stopped=false errors=- "
+        "discovered=3 discovery_complete=true\n"
+    )
+
+
+def test_douyin_all_and_limit_are_mutually_exclusive(capsys):
+    assert main(["export", "douyin-favorites", "--all", "--limit", "5"]) == 2
+    assert "not allowed with argument --all" in capsys.readouterr().err
+
+
+def test_douyin_all_refreshes_index_and_wiki_after_success(monkeypatch, tmp_path):
+    calls = []
+    report = tmp_path / "audit.json"
+    monkeypatch.setattr(
+        "pkb.cli.run_douyin_full",
+        lambda **_: SimpleNamespace(
+            counts={}, errors={}, stopped=False, cleanup_pending=0,
+            discovered=2, discovery_complete=True,
+            index_refreshed=False, wiki_refreshed=False,
+        ),
+    )
+    monkeypatch.setattr(
+        "pkb.cli._refresh_douyin_outputs",
+        lambda: calls.append("refresh") or (True, True),
+        raising=False,
+    )
+
+    assert main(["export", "douyin-favorites", "--all", "--report", str(report)]) == 0
+    assert calls == ["refresh"]
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["index_refreshed"] is True
+    assert payload["wiki_refreshed"] is True
+
+
+def test_douyin_all_does_not_refresh_after_run_stopper(monkeypatch, tmp_path):
+    calls = []
+    report = tmp_path / "audit.json"
+    monkeypatch.setattr(
+        "pkb.cli.run_douyin_full",
+        lambda **_: SimpleNamespace(
+            counts={}, errors={"auth_required": 1}, stopped=True,
+            cleanup_pending=0, discovered=0, discovery_complete=False,
+            index_refreshed=False, wiki_refreshed=False,
+        ),
+    )
+    monkeypatch.setattr(
+        "pkb.cli._refresh_douyin_outputs",
+        lambda: calls.append("refresh") or (True, True),
+        raising=False,
+    )
+
+    assert main(["export", "douyin-favorites", "--all", "--report", str(report)]) == 1
+    assert calls == []
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["index_refreshed"] is False
+    assert payload["wiki_refreshed"] is False
+
+
+@pytest.mark.parametrize(
+    ("refresh_result", "safe_code"),
+    [
+        ((False, False), "index_refresh_failed"),
+        ((True, False), "wiki_refresh_failed"),
+    ],
+)
+def test_douyin_all_refresh_failure_is_safe_and_returns_one(
+    monkeypatch, tmp_path, capsys, refresh_result, safe_code
+):
+    report = tmp_path / "audit.json"
+    secret = "C:/private/raw/sessionid=secret"
+    monkeypatch.setattr(
+        "pkb.cli.run_douyin_full",
+        lambda **_: SimpleNamespace(
+            counts={}, errors={}, stopped=False, cleanup_pending=0,
+            discovered=1, discovery_complete=True,
+            index_refreshed=False, wiki_refreshed=False,
+        ),
+    )
+    monkeypatch.setattr(
+        "pkb.cli._refresh_douyin_outputs", lambda: refresh_result, raising=False
+    )
+
+    assert main(
+        ["export", "douyin-favorites", "--all", "--report", str(report)]
+    ) == 1
+    output = capsys.readouterr().out
+    assert f"errors={safe_code}:1" in output
+    assert secret not in output
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["errors"] == {safe_code: 1}
+    assert payload["index_refreshed"] is refresh_result[0]
+    assert payload["wiki_refreshed"] is refresh_result[1]
 
 
 def test_douyin_trial_rejects_limit_outside_one_to_twenty():

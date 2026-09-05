@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 import json
 import os
 import re
@@ -157,7 +159,10 @@ def _build_parser() -> argparse.ArgumentParser:
     douyin_parser.add_argument("--output", default="data/raw/douyin-favorites.jsonl")
     douyin_parser.add_argument("--state", default="data/state/douyin-favorites.state.json")
     douyin_parser.add_argument("--report", default="data/state/douyin-favorites.audit.json")
-    douyin_parser.add_argument("--limit", type=int, choices=range(1, 21), default=20)
+    douyin_mode = douyin_parser.add_mutually_exclusive_group()
+    douyin_mode.add_argument("--all", action="store_true")
+    douyin_mode.add_argument("--limit", type=int, choices=range(1, 21))
+    douyin_parser.set_defaults(limit=20)
     douyin_parser.add_argument("--request-delay", type=_douyin_request_delay, default=7.0)
     douyin_parser.add_argument("--temp-root")
 
@@ -228,27 +233,128 @@ def run_douyin_trial(
     )
 
 
+def run_douyin_full(
+    *,
+    output: Path,
+    state: Path,
+    report: Path,
+    temp_root: Path,
+    request_delay: float,
+) -> Any:
+    """Compose the complete authenticated sync without exporting browser cookies."""
+    from pkb.douyin.live import run_live_full
+
+    return run_live_full(
+        output=output, state=state, report=report, temp_root=temp_root,
+        request_delay=request_delay,
+    )
+
+
+def _refresh_douyin_outputs() -> tuple[bool, bool]:
+    """Refresh derived outputs while keeping nested command details private."""
+    sink = StringIO()
+    try:
+        with redirect_stdout(sink), redirect_stderr(sink):
+            index_code = main(
+                [
+                    "index", "build",
+                    "--raw-dir", "data/raw",
+                    "--db", "data/index/knowledge.db",
+                    "--strict",
+                ]
+            )
+    except Exception:
+        return False, False
+    if index_code != 0:
+        return False, False
+
+    try:
+        with redirect_stdout(sink), redirect_stderr(sink):
+            wiki_code = main(
+                [
+                    "wiki", "export",
+                    "--db", "data/index/knowledge.db",
+                    "--vault", "vault",
+                    "--report", "data/state/wiki-export-report.json",
+                ]
+            )
+    except Exception:
+        return True, False
+    return True, wiki_code == 0
+
+
+def _write_douyin_full_audit(
+    report: Path,
+    audit: Any,
+    errors: dict[str, int],
+    *,
+    index_refreshed: bool,
+    wiki_refreshed: bool,
+) -> None:
+    from pkb.douyin.live import write_audit_atomic
+
+    write_audit_atomic(
+        report,
+        {
+            "counts": dict(audit.counts),
+            "errors": errors,
+            "stopped": bool(audit.stopped),
+            "cleanup_pending": int(audit.cleanup_pending),
+            "discovered": int(audit.discovered),
+            "discovery_complete": bool(audit.discovery_complete),
+            "index_refreshed": index_refreshed,
+            "wiki_refreshed": wiki_refreshed,
+        },
+    )
+
+
 def _run_douyin_favorites(args: argparse.Namespace) -> int:
     temp_root = Path(args.temp_root).resolve() if args.temp_root else _default_douyin_temp_root()
     try:
-        audit = run_douyin_trial(
-            output=Path(args.output),
-            state=Path(args.state),
-            report=Path(args.report),
-            temp_root=temp_root,
-            limit=args.limit,
-            request_delay=args.request_delay,
-        )
+        common = {
+            "output": Path(args.output),
+            "state": Path(args.state),
+            "report": Path(args.report),
+            "temp_root": temp_root,
+            "request_delay": args.request_delay,
+        }
+        if args.all:
+            audit = run_douyin_full(**common)
+        else:
+            audit = run_douyin_trial(**common, limit=args.limit)
     except Exception:
         print("Douyin trial stopped: internal_error", file=__import__("sys").stderr)
         return 1
 
     counts = audit.counts
+    errors = dict(audit.errors)
+    refresh_failed = False
+    if args.all:
+        index_refreshed = bool(getattr(audit, "index_refreshed", False))
+        wiki_refreshed = bool(getattr(audit, "wiki_refreshed", False))
+        if not audit.stopped and audit.discovery_complete:
+            index_refreshed, wiki_refreshed = _refresh_douyin_outputs()
+            if not index_refreshed:
+                errors["index_refresh_failed"] = 1
+                refresh_failed = True
+            elif not wiki_refreshed:
+                errors["wiki_refresh_failed"] = 1
+                refresh_failed = True
+        try:
+            _write_douyin_full_audit(
+                Path(args.report), audit, errors,
+                index_refreshed=index_refreshed,
+                wiki_refreshed=wiki_refreshed,
+            )
+        except Exception:
+            print("Douyin full sync stopped: internal_error", file=__import__("sys").stderr)
+            return 1
+
     safe_errors = []
-    for code, count in sorted(audit.errors.items()):
+    for code, count in sorted(errors.items()):
         safe_code = code if re.fullmatch(r"[a-z0-9_]+", code) else "internal_error"
         safe_errors.append(f"{safe_code}:{int(count)}")
-    print(
+    fields = (
         f"selected={counts.get('selected', 0)} "
         f"persisted={counts.get('persisted', 0)} "
         f"cleaned={counts.get('cleaned', 0)} "
@@ -258,7 +364,13 @@ def _run_douyin_favorites(args: argparse.Namespace) -> int:
         f"stopped={str(audit.stopped).lower()} "
         f"errors={','.join(safe_errors) or '-'}"
     )
-    return 1 if audit.stopped else 0
+    if args.all:
+        fields += (
+            f" discovered={int(audit.discovered)}"
+            f" discovery_complete={str(bool(audit.discovery_complete)).lower()}"
+        )
+    print(fields)
+    return 1 if audit.stopped or refresh_failed else 0
 
 
 def _add_knowledge_parsers(subparsers: argparse._SubParsersAction) -> None:
