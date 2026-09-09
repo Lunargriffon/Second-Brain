@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 import json
 from pathlib import Path
 import shutil
@@ -42,7 +41,6 @@ class OpenCliFavoritesBrowser:
         self.session = session
         self.executable = shutil.which("opencli") or "opencli"
         self.opened = False
-        self.last_count = -1
 
     def page(self, cursor: str | None) -> FavoritePage:
         if not self.opened:
@@ -55,55 +53,38 @@ class OpenCliFavoritesBrowser:
                 raise CollectionStopped("auth_required")
             self._run([self.executable, "browser", self.session, "open", self.FAVORITES_URL])
             self.opened = True
-        elif cursor is not None:
-            scroll_script = (
-                "var root=document.querySelector('.route-scroll-container');"
-                "if(root){root.scrollTop=root.scrollHeight;}true"
-            )
-            self._run(
-                [self.executable, "browser", self.session, "eval", scroll_script]
-            )
+            self._run([self.executable, "browser", self.session, "wait", "time", "2"])
 
-        self._run([self.executable, "browser", self.session, "wait", "time", "2"])
+        page_cursor = cursor or "0"
         script = (
-            "Array.from(document.links)"
-            ".filter(function(link){return link.href.includes('/video/');})"
-            ".filter(function(link){return link.closest('ul');})"
-            ".filter(function(link){return link.closest('footer')===null;})"
-            ".map(function(link){return link.href;})"
+            "(async function(){"
+            "var response=await fetch("
+            "'/aweme/v1/web/aweme/listcollection/?device_platform=webapp&aid=6383&channel=channel_pc_web',"
+            "{method:'POST',credentials:'include',"
+            "headers:{'content-type':'application/x-www-form-urlencoded;charset=UTF-8'},"
+            f"body:'count=10&cursor={page_cursor}'}});"
+            "var data=await response.json();"
+            "if(data.status_code!==0){return {status:response.status,error:'api_error'};}"
+            "return {items:(data.aweme_list||[]).map(function(item){"
+            "return {aweme_id:String(item.aweme_id||''),"
+            "share_url:'https://www.douyin.com/video/'+String(item.aweme_id||''),"
+            "author:item.author||{},desc:item.desc||'',"
+            "text_extra:item.text_extra||[],create_time:item.create_time};}),"
+            "cursor:data.cursor,has_more:Boolean(data.has_more),"
+            "observed_at:new Date().toISOString()};})()"
         )
         completed = self._run(
             [self.executable, "browser", self.session, "eval", script]
         )
         try:
             value = json.loads(completed.stdout)
-            if not isinstance(value, list):
+            if not isinstance(value, Mapping):
                 raise ValueError
         except (json.JSONDecodeError, ValueError, TypeError):
             raise CollectionStopped("browser_unavailable") from None
-        raw_items = []
-        for link in value:
-            if not isinstance(link, str) or "/video/" not in link:
-                continue
-            work_id = link.split("/video/", 1)[1].split("?", 1)[0].split("/", 1)[0]
-            if work_id.isdigit():
-                raw_items.append({
-                    "aweme_id": work_id,
-                    "share_url": f"https://www.douyin.com/video/{work_id}",
-                    "author": {"uid": "unknown", "nickname": ""},
-                })
-        normalized = {
-            "items": raw_items,
-            "cursor": str(len(raw_items)),
-            "has_more": bool(raw_items),
-            "observed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        }
-        page = FavoritePage.from_result(normalized)
-        current_count = len(page.items)
-        if cursor is not None and current_count <= self.last_count:
-            page = FavoritePage(page.items, None, page.observed_at)
-        self.last_count = max(self.last_count, current_count)
-        return page
+        if value.get("error") == "api_error":
+            raise CollectionStopped("browser_unavailable")
+        return FavoritePage.from_result(value)
 
     def _run(self, command: list[str]) -> subprocess.CompletedProcess[str]:
         try:

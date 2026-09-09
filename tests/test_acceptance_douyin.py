@@ -3,6 +3,8 @@ import json
 import shutil
 import subprocess
 
+import pytest
+
 from pkb.douyin.manifest import ManifestStore
 from pkb.douyin.media import MediaPaths
 from pkb.douyin.models import FavoriteItem, TranscriptSegment
@@ -216,8 +218,10 @@ def test_live_audit_is_replaced_atomically_without_private_details(tmp_path):
     assert not report.with_suffix(".json.tmp").exists()
 
 
-def test_browser_stops_pagination_when_scroll_reveals_no_new_favorites():
-    payload = json.dumps(["https://www.douyin.com/video/7"])
+def test_browser_stops_pagination_when_server_reports_no_more_favorites():
+    payload = json.dumps(
+        {"items": [{"aweme_id": "7"}], "cursor": None, "has_more": False}
+    )
 
     def runner(command, **_kwargs):
         output = json.dumps({"logged_in": True}) if "whoami" in command else ("" if "open" in command else payload)
@@ -225,14 +229,66 @@ def test_browser_stops_pagination_when_scroll_reveals_no_new_favorites():
 
     browser = OpenCliFavoritesBrowser(runner=runner)
     assert browser.executable == (shutil.which("opencli") or "opencli")
-    assert browser.page(None).cursor == "1"
-    assert browser.page("1").cursor is None
+    assert browser.page(None).cursor is None
 
 
-def test_browser_reads_all_favorite_links_after_wait_and_excludes_footer():
+def test_browser_reports_collection_api_errors_instead_of_treating_them_as_empty():
+    payload = json.dumps({"status": 200, "error": "api_error"})
+
+    def runner(command, **_kwargs):
+        output = json.dumps({"logged_in": True}) if "whoami" in command else ("" if "open" in command else payload)
+        return subprocess.CompletedProcess(command, 0, output, "")
+
+    browser = OpenCliFavoritesBrowser(runner=runner)
+
+    with pytest.raises(CollectionStopped, match="browser_unavailable"):
+        browser.page(None)
+
+
+def test_browser_pages_the_collection_api_by_server_cursor():
     calls = []
-    favorite_links = [f"https://www.douyin.com/video/{number}" for number in range(1, 602)]
-    footer_link = "https://www.douyin.com/video/999999"
+    responses = iter(
+        [
+            {"items": [{"aweme_id": "7"}], "cursor": "next-7", "has_more": True},
+            {"items": [{"aweme_id": "8"}], "cursor": None, "has_more": False},
+        ]
+    )
+
+    def runner(command, **_kwargs):
+        calls.append(command)
+        if "whoami" in command:
+            output = json.dumps({"logged_in": True})
+        elif "eval" in command:
+            output = json.dumps(next(responses))
+        else:
+            output = ""
+        return subprocess.CompletedProcess(command, 0, output, "")
+
+    browser = OpenCliFavoritesBrowser(runner=runner)
+    first = browser.page(None)
+    second = browser.page(first.cursor)
+
+    assert [item["aweme_id"] for item in first.items] == ["7"]
+    assert [item["aweme_id"] for item in second.items] == ["8"]
+    eval_scripts = [call[-1] for call in calls if "eval" in call]
+    assert "cursor=0" in eval_scripts[0]
+    assert "cursor=next-7" in eval_scripts[1]
+    assert "listcollection" in eval_scripts[0]
+
+
+def test_browser_reads_favorite_items_from_collection_api_after_wait():
+    calls = []
+    payload = {
+        "items": [
+            {
+                "aweme_id": "7",
+                "share_url": "https://www.douyin.com/video/7",
+                "author": {"uid": "author-7", "nickname": "author"},
+            }
+        ],
+        "cursor": "next",
+        "has_more": True,
+    }
 
     def runner(command, **_kwargs):
         calls.append(command)
@@ -240,32 +296,20 @@ def test_browser_reads_all_favorite_links_after_wait_and_excludes_footer():
             return subprocess.CompletedProcess(command, 0, json.dumps({"logged_in": True}), "")
         if "eval" in command:
             script = command[-1]
-            if "scrollTo" in script:
-                return subprocess.CompletedProcess(command, 0, "true", "")
-            assert "document.links" in script
             assert "&&" not in script
             assert "=>" not in script
-            assert "closest('ul')" in script
-            assert "closest('footer')" in script
-            return subprocess.CompletedProcess(command, 0, json.dumps(favorite_links), "")
+            assert "listcollection" in script
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
         return subprocess.CompletedProcess(command, 0, "", "")
 
     browser = OpenCliFavoritesBrowser(runner=runner)
     first = browser.page(None)
-    browser.page(first.cursor)
 
-    assert len(first.items) == 601
-    assert all(item["share_url"] != footer_link for item in first.items)
-    reads = [index for index, call in enumerate(calls) if "document.links" in call[-1]]
+    assert [item["aweme_id"] for item in first.items] == ["7"]
+    reads = [index for index, call in enumerate(calls) if "listcollection" in call[-1]]
     waits = [index for index, call in enumerate(calls) if "wait" in call and "time" in call]
-    scrolls = [call[-1] for call in calls if "scrollTo" in call[-1]]
-    assert scrolls == [
-        "var root=document.querySelector('.route-scroll-container');"
-        "if(root){root.scrollTop=root.scrollHeight;}true"
-    ]
-    assert len(waits) == 2
+    assert len(waits) == 1
     assert waits[0] < reads[0]
-    assert waits[1] < reads[1]
 
 
 def test_downloader_falls_back_to_opencli_media_url_when_chrome_dpapi_fails(tmp_path):
