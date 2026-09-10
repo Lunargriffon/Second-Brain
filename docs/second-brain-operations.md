@@ -65,22 +65,36 @@ pkb index build --raw-dir data/raw --db data/index/knowledge.db --strict
 pkb search "口述内容中的短语" --db data/index/knowledge.db --source douyin
 ```
 
-Before running a full-library import, inspect the 20-item audit and manually
-compare five speech-bearing transcripts with their source videos. Then start the
-explicit full mode:
+For the bounded trial, manually compare five speech-bearing transcripts with
+their source videos before relying on transcription quality.
+
+Full mode is a knowledge-value sync, not a media archive. It classifies each
+video independently from its caption/title, hashtags, and author metadata;
+folder names are not used because favorites may be filed inconsistently.
+Tutorials, methods, analysis, reusable experience, and subject knowledge are
+kept. Beauty display, scenery, wallpaper, entertainment clips, gaming
+highlights, travel guides, and similar appreciation-only material are excluded
+before download; ambiguous metadata is excluded by default.
+
+To apply the current policy to every known favorite and resume the filtered
+full sync, run:
 
 ```powershell
-pkb export douyin-favorites --all --request-delay 7
+pkb export douyin-favorites --all --reclassify --request-delay 7
 ```
 
-Full mode repeatedly scrolls the authenticated favorites page and considers
-discovery complete only after three consecutive observations add no new work.
-It checkpoints each newly discovered batch before processing, skips already
-cleaned items, and does not delete existing raw records. If the process is
-interrupted or reports a safe stop signal, resolve the visible login, challenge,
-or rate-limit condition and rerun the identical command. Once processing
-finishes without a stop signal, full mode rebuilds the strict knowledge index
-and refreshes the generated Wiki projection.
+Full mode pages the authenticated flat favorites feed and considers discovery
+complete only after three consecutive observations add no new work. It
+checkpoints each batch and every versioned classification decision. When the
+policy excludes records that already exist locally, it validates the complete
+JSONL, copies the old corpus to `data/backups/douyin-favorites`, and atomically
+replaces the canonical file with kept records only. Rerunning the identical
+command resumes unfinished kept videos without downloading excluded videos.
+
+The command returns nonzero and does not refresh the index or Wiki while any
+kept item has a retryable failure or pending cleanup. After a complete run, the
+audit reports aggregate `classified`, `eligible`, `excluded`, and reason counts;
+then the strict index and generated Wiki are refreshed.
 
 ## Search
 

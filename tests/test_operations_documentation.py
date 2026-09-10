@@ -76,9 +76,12 @@ def test_operations_guide_covers_bounded_douyin_trial_and_recovery():
 def test_operations_guide_covers_full_douyin_sync_and_recovery():
     text = OPERATIONS_GUIDE.read_text(encoding="utf-8")
 
-    assert "pkb export douyin-favorites --all --request-delay 7" in text
+    assert "pkb export douyin-favorites --all --reclassify --request-delay 7" in text
     assert "three consecutive" in text
-    assert "does not delete existing raw records" in text
+    assert "knowledge-value" in text
+    assert "folder names are not used" in text
+    assert "ambiguous metadata is excluded" in text
+    assert "data/backups/douyin-favorites" in text
 
 
 def test_readme_links_shipped_guides_and_has_clean_workflow():

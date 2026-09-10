@@ -137,6 +137,7 @@ def test_douyin_all_selects_full_runner(monkeypatch, tmp_path, capsys):
             "export",
             "douyin-favorites",
             "--all",
+            "--reclassify",
             "--state",
             str(tmp_path / "state.json"),
             "--report",
@@ -145,12 +146,62 @@ def test_douyin_all_selects_full_runner(monkeypatch, tmp_path, capsys):
     ) == 0
 
     assert captured["request_delay"] == 7
+    assert captured["reclassify"] is True
     assert "limit" not in captured
     assert capsys.readouterr().out == (
-        "selected=3 persisted=2 cleaned=2 unavailable=0 failed=0 "
+        "classified=0 eligible=0 excluded=0 selected=3 persisted=2 cleaned=2 unavailable=0 failed=0 "
         "cleanup_pending=0 stopped=false errors=- "
         "discovered=3 discovery_complete=true\n"
     )
+
+
+def test_douyin_all_does_not_publish_when_kept_items_failed(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        "pkb.cli.run_douyin_full",
+        lambda **_: SimpleNamespace(
+            counts={"eligible": 2, "failed": 1},
+            errors={"transcription_failed": 1},
+            stopped=False,
+            cleanup_pending=0,
+            discovered=2,
+            discovery_complete=True,
+            reason_counts={},
+            index_refreshed=False,
+            wiki_refreshed=False,
+        ),
+    )
+    monkeypatch.setattr(
+        "pkb.cli._refresh_douyin_outputs",
+        lambda: calls.append("refresh") or (True, True),
+    )
+
+    assert main(["export", "douyin-favorites", "--all"]) == 1
+    assert calls == []
+
+
+def test_douyin_full_audit_includes_safe_reason_counts(monkeypatch, tmp_path):
+    report = tmp_path / "audit.json"
+    monkeypatch.setattr(
+        "pkb.cli.run_douyin_full",
+        lambda **_: SimpleNamespace(
+            counts={"classified": 2, "eligible": 1, "excluded": 1},
+            errors={},
+            stopped=False,
+            cleanup_pending=0,
+            discovered=2,
+            discovery_complete=True,
+            reason_counts={"appreciation_scenery": 1},
+            index_refreshed=False,
+            wiki_refreshed=False,
+        ),
+    )
+    monkeypatch.setattr("pkb.cli._refresh_douyin_outputs", lambda: (True, True))
+
+    assert main(["export", "douyin-favorites", "--all", "--report", str(report)]) == 0
+
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["reason_counts"] == {"appreciation_scenery": 1}
 
 
 def test_douyin_all_and_limit_are_mutually_exclusive(capsys):

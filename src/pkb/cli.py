@@ -165,6 +165,7 @@ def _build_parser() -> argparse.ArgumentParser:
     douyin_parser.set_defaults(limit=20)
     douyin_parser.add_argument("--request-delay", type=_douyin_request_delay, default=7.0)
     douyin_parser.add_argument("--temp-root")
+    douyin_parser.add_argument("--reclassify", action="store_true")
 
     audit_zhihu_parser = audit_subparsers.add_parser("zhihu")
     audit_zhihu_parser.add_argument("--collections-file", required=True)
@@ -240,13 +241,14 @@ def run_douyin_full(
     report: Path,
     temp_root: Path,
     request_delay: float,
+    reclassify: bool = False,
 ) -> Any:
     """Compose the complete authenticated sync without exporting browser cookies."""
     from pkb.douyin.live import run_live_full
 
     return run_live_full(
         output=output, state=state, report=report, temp_root=temp_root,
-        request_delay=request_delay,
+        request_delay=request_delay, reclassify=reclassify,
     )
 
 
@@ -304,6 +306,10 @@ def _write_douyin_full_audit(
             "discovery_complete": bool(audit.discovery_complete),
             "index_refreshed": index_refreshed,
             "wiki_refreshed": wiki_refreshed,
+            "reason_counts": {
+                code if re.fullmatch(r"[a-z0-9_]+", code) else "internal_error": int(count)
+                for code, count in dict(getattr(audit, "reason_counts", {}) or {}).items()
+            },
         },
     )
 
@@ -319,7 +325,7 @@ def _run_douyin_favorites(args: argparse.Namespace) -> int:
             "request_delay": args.request_delay,
         }
         if args.all:
-            audit = run_douyin_full(**common)
+            audit = run_douyin_full(**common, reclassify=args.reclassify)
         else:
             audit = run_douyin_trial(**common, limit=args.limit)
     except Exception:
@@ -329,10 +335,11 @@ def _run_douyin_favorites(args: argparse.Namespace) -> int:
     counts = audit.counts
     errors = dict(audit.errors)
     refresh_failed = False
+    incomplete = counts.get("failed", 0) > 0 or audit.cleanup_pending > 0
     if args.all:
         index_refreshed = bool(getattr(audit, "index_refreshed", False))
         wiki_refreshed = bool(getattr(audit, "wiki_refreshed", False))
-        if not audit.stopped and audit.discovery_complete:
+        if not audit.stopped and audit.discovery_complete and not incomplete:
             index_refreshed, wiki_refreshed = _refresh_douyin_outputs()
             if not index_refreshed:
                 errors["index_refresh_failed"] = 1
@@ -365,12 +372,18 @@ def _run_douyin_favorites(args: argparse.Namespace) -> int:
         f"errors={','.join(safe_errors) or '-'}"
     )
     if args.all:
+        fields = (
+            f"classified={counts.get('classified', 0)} "
+            f"eligible={counts.get('eligible', 0)} "
+            f"excluded={counts.get('excluded', 0)} "
+            + fields
+        )
         fields += (
             f" discovered={int(audit.discovered)}"
             f" discovery_complete={str(bool(audit.discovery_complete)).lower()}"
         )
     print(fields)
-    return 1 if audit.stopped or refresh_failed else 0
+    return 1 if audit.stopped or refresh_failed or incomplete else 0
 
 
 def _add_knowledge_parsers(subparsers: argparse._SubParsersAction) -> None:

@@ -89,6 +89,7 @@ class DouyinPipeline:
         transcriber: Transcriber,
         probe: Callable[[MediaPaths], MediaInfo],
         classifier: KnowledgeValueClassifier | None = None,
+        force_reclassify: bool = False,
     ) -> None:
         self.manifest = manifest
         self.raw_store = raw_store
@@ -97,6 +98,7 @@ class DouyinPipeline:
         self.transcriber = transcriber
         self.probe = probe
         self.classifier = classifier
+        self.force_reclassify = force_reclassify
 
     def run(self) -> RunAudit:
         counts: Counter[str] = Counter()
@@ -112,7 +114,7 @@ class DouyinPipeline:
                             author=entry.author,
                         )
                     )
-                    if self.manifest.needs_classification(
+                    if self.force_reclassify or self.manifest.needs_classification(
                         entry.work_id,
                         decision.classifier_version,
                         decision.input_hash,

@@ -246,7 +246,11 @@ class FullRunAudit:
 
 
 def _build_pipeline(
-    manifest: ManifestStore, output: Path, temp_root: Path
+    manifest: ManifestStore,
+    output: Path,
+    temp_root: Path,
+    *,
+    reclassify: bool = False,
 ) -> DouyinPipeline:
     return DouyinPipeline(
         manifest=manifest,
@@ -256,6 +260,7 @@ def _build_pipeline(
         transcriber=FallbackTranscriber(SenseVoiceEngine(), FasterWhisperEngine()),
         probe=probe_audio,
         classifier=RuleBasedKnowledgeValueClassifier(),
+        force_reclassify=reclassify,
     )
 
 
@@ -275,6 +280,7 @@ def run_live_full(
     browser: FavoritesBrowser | None = None,
     delay: Callable[[float], None] = time.sleep,
     pipeline_factory: Callable[[ManifestStore], DouyinPipeline] | None = None,
+    reclassify: bool = False,
 ) -> FullRunAudit:
     manifest = ManifestStore(state)
     known = {item.work_id for item in manifest.items()}
@@ -291,7 +297,7 @@ def run_live_full(
         pipeline = (
             pipeline_factory(manifest)
             if pipeline_factory is not None
-            else _build_pipeline(manifest, output, temp_root)
+            else _build_pipeline(manifest, output, temp_root, reclassify=reclassify)
         )
         run = pipeline.run()
         if not run.stopped:
