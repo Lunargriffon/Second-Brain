@@ -9,6 +9,8 @@ import math
 from typing import Any, Mapping
 from urllib.parse import urlparse
 
+from .eligibility import Eligibility, EligibilityDecision
+
 
 class Stage(str, Enum):
     DISCOVERED = "discovered"
@@ -86,6 +88,10 @@ class FavoriteItem:
     published_at: str | None
     observed_at: str
     stage: Stage = Stage.DISCOVERED
+    eligibility: Eligibility | None = None
+    eligibility_reasons: tuple[str, ...] = ()
+    classifier_version: str | None = None
+    classification_input_hash: str | None = None
 
     def __post_init__(self) -> None:
         _validate_id(self.work_id, "work_id")
@@ -93,12 +99,35 @@ class FavoriteItem:
         _validate_https_url(self.url)
         _validate_timestamp(self.published_at, "published_at")
         _validate_timestamp(self.observed_at, "observed_at")
+        classification_fields = (
+            self.eligibility,
+            self.classifier_version,
+            self.classification_input_hash,
+        )
+        if self.eligibility is None:
+            if any(value is not None for value in classification_fields[1:]) or self.eligibility_reasons:
+                raise ValueError("classification fields must be set together")
+        elif (
+            not self.eligibility_reasons
+            or not self.classifier_version
+            or not self.classification_input_hash
+        ):
+            raise ValueError("classification fields must be set together")
 
     def transition(self, target: Stage) -> FavoriteItem:
         target = Stage(target)
         if target not in _NEXT[self.stage]:
             raise ValueError(f"illegal stage transition: {self.stage.value} -> {target.value}")
         return replace(self, stage=target)
+
+    def with_eligibility(self, decision: EligibilityDecision) -> FavoriteItem:
+        return replace(
+            self,
+            eligibility=decision.eligibility,
+            eligibility_reasons=decision.reasons,
+            classifier_version=decision.classifier_version,
+            classification_input_hash=decision.input_hash,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -111,6 +140,10 @@ class FavoriteItem:
             "published_at": self.published_at,
             "observed_at": self.observed_at,
             "stage": self.stage.value,
+            "eligibility": None if self.eligibility is None else self.eligibility.value,
+            "eligibility_reasons": list(self.eligibility_reasons),
+            "classifier_version": self.classifier_version,
+            "classification_input_hash": self.classification_input_hash,
         }
 
     @classmethod
@@ -125,6 +158,24 @@ class FavoriteItem:
             published_at=value.get("published_at"),
             observed_at=str(value["observed_at"]),
             stage=Stage(value.get("stage", Stage.DISCOVERED.value)),
+            eligibility=(
+                None
+                if value.get("eligibility") is None
+                else Eligibility(str(value["eligibility"]))
+            ),
+            eligibility_reasons=tuple(
+                str(reason) for reason in value.get("eligibility_reasons", ())
+            ),
+            classifier_version=(
+                None
+                if value.get("classifier_version") is None
+                else str(value["classifier_version"])
+            ),
+            classification_input_hash=(
+                None
+                if value.get("classification_input_hash") is None
+                else str(value["classification_input_hash"])
+            ),
         )
 
 

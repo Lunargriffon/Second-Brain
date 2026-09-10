@@ -1,5 +1,6 @@
 import pytest
 
+from pkb.douyin.eligibility import Eligibility, EligibilityDecision
 from pkb.douyin.models import DouyinRawRecord, FavoriteItem, Stage, TranscriptSegment
 
 
@@ -21,6 +22,28 @@ def test_stage_transition_is_explicit_and_serializable():
     acquired = item().transition(Stage.ACQUIRED)
     assert acquired.to_dict()["stage"] == "acquired"
     assert FavoriteItem.from_dict(acquired.to_dict()) == acquired
+
+
+def test_favorite_item_round_trips_eligibility_decision():
+    decision = EligibilityDecision(
+        eligibility=Eligibility.KEEP,
+        reasons=("knowledge_tutorial",),
+        classifier_version="rules-v1",
+        input_hash="abc",
+    )
+
+    classified = item().with_eligibility(decision)
+
+    assert FavoriteItem.from_dict(classified.to_dict()) == classified
+    assert classified.stage is Stage.DISCOVERED
+
+
+def test_favorite_item_rejects_partial_eligibility_state():
+    values = item().to_dict()
+    values["eligibility"] = "keep"
+
+    with pytest.raises(ValueError, match="classification fields"):
+        FavoriteItem.from_dict(values)
 
 
 def test_illegal_transition_is_rejected():
