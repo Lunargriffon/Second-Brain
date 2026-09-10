@@ -5,6 +5,7 @@ import subprocess
 
 import pytest
 
+from pkb.douyin.eligibility import Eligibility, EligibilityDecision
 from pkb.douyin.manifest import ManifestStore
 from pkb.douyin.media import MediaPaths
 from pkb.douyin.models import FavoriteItem, TranscriptSegment
@@ -174,6 +175,61 @@ def test_full_run_reports_checkpointed_discovery_when_collection_stops(tmp_path)
     assert audit.discovered == 1
     assert audit.discovery_complete is False
     assert audit.counts["selected"] == 0
+
+
+def test_full_run_atomically_filters_existing_raw_corpus_after_classification(tmp_path):
+    favorites = _favorites()[:2]
+    browser = FullRunBrowser([favorites, favorites, favorites, favorites])
+    output = tmp_path / "raw.jsonl"
+    output.write_text(
+        json.dumps({"work_id": "1", "transcript_text": "knowledge"})
+        + "\n"
+        + json.dumps({"work_id": "2", "transcript_text": "scenery"})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    class ClassifiedPipeline:
+        def __init__(self, manifest):
+            self.manifest = manifest
+
+        def run(self):
+            for work_id, eligibility in (
+                ("1", Eligibility.KEEP),
+                ("2", Eligibility.EXCLUDE),
+            ):
+                self.manifest.set_eligibility(
+                    work_id,
+                    EligibilityDecision(
+                        eligibility,
+                        ("test",),
+                        "rules-v1",
+                        f"hash-{work_id}",
+                    ),
+                )
+            return RunAudit(
+                {"classified": 2, "eligible": 1, "excluded": 1, "selected": 0},
+                {},
+                False,
+                0,
+                {"test": 1},
+            )
+
+    audit = run_live_full(
+        output=output,
+        state=tmp_path / "state.json",
+        report=tmp_path / "audit.json",
+        temp_root=tmp_path / "media",
+        request_delay=7,
+        browser=browser,
+        pipeline_factory=ClassifiedPipeline,
+        delay=lambda _seconds: None,
+    )
+
+    assert [json.loads(line)["work_id"] for line in output.read_text().splitlines()] == ["1"]
+    backups = list((tmp_path / "backups" / "douyin-favorites").glob("*.bak.jsonl"))
+    assert len(backups) == 1
+    assert audit.counts["corpus_removed"] == 1
 
 
 def test_offline_douyin_trial_is_resumable_searchable_and_clean(tmp_path):

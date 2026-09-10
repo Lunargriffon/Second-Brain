@@ -17,6 +17,7 @@ from .manifest import ManifestStore
 from .media import AcquisitionFailure, TemporaryMedia
 from .models import FavoriteItem
 from .pipeline import DouyinPipeline, DurableJsonlStore, MediaInfo, RunAudit
+from .rebuild import rebuild_filtered_corpus
 from .transcription import FallbackTranscriber, FasterWhisperEngine, SenseVoiceEngine
 from pkb.opencli_gateway import OpenCliError, OpenCliGateway
 
@@ -258,6 +259,12 @@ def _build_pipeline(
     )
 
 
+def _douyin_backup_root(output: Path) -> Path:
+    output = Path(output)
+    data_root = output.parent.parent if output.parent.name == "raw" else output.parent
+    return data_root / "backups" / "douyin-favorites"
+
+
 def run_live_full(
     *,
     output: Path,
@@ -287,6 +294,13 @@ def run_live_full(
             else _build_pipeline(manifest, output, temp_root)
         )
         run = pipeline.run()
+        if not run.stopped:
+            rebuild = rebuild_filtered_corpus(
+                output,
+                manifest,
+                _douyin_backup_root(output),
+            )
+            run.counts["corpus_removed"] = rebuild.removed
         audit = FullRunAudit(
             counts=run.counts,
             errors=run.errors,
