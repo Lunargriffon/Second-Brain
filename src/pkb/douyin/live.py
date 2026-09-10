@@ -12,6 +12,7 @@ from typing import Any, Callable, Mapping
 from urllib.parse import urlparse
 
 from .collector import CollectionStopped, FavoritePage, FavoritesBrowser, FavoritesCollector
+from .eligibility import RuleBasedKnowledgeValueClassifier
 from .manifest import ManifestStore
 from .media import AcquisitionFailure, TemporaryMedia
 from .models import FavoriteItem
@@ -240,6 +241,7 @@ class FullRunAudit:
     discovery_complete: bool
     index_refreshed: bool = False
     wiki_refreshed: bool = False
+    reason_counts: dict[str, int] | None = None
 
 
 def _build_pipeline(
@@ -252,6 +254,7 @@ def _build_pipeline(
         acquirer=YtDlpAcquirer(),
         transcriber=FallbackTranscriber(SenseVoiceEngine(), FasterWhisperEngine()),
         probe=probe_audio,
+        classifier=RuleBasedKnowledgeValueClassifier(),
     )
 
 
@@ -291,6 +294,7 @@ def run_live_full(
             cleanup_pending=run.cleanup_pending,
             discovered=len(discovered),
             discovery_complete=True,
+            reason_counts=run.reason_counts,
         )
     except CollectionStopped as exc:
         audit = FullRunAudit(

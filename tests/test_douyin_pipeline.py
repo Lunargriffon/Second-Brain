@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-
+from pkb.douyin.eligibility import Eligibility, EligibilityDecision
 from pkb.douyin.manifest import ManifestStore
 from pkb.douyin.media import AcquisitionFailure, MediaPaths
 from pkb.douyin.models import FavoriteItem, Stage, TranscriptSegment
@@ -17,13 +17,17 @@ class FakeMedia:
     def __init__(self, root: Path):
         self.root = root
         self.cleaned = []
+        self.prepared = []
+        self.extracted = []
 
     def prepare(self, work_id):
+        self.prepared.append(work_id)
         directory = self.root / work_id
         directory.mkdir(parents=True, exist_ok=True)
         return MediaPaths(directory, directory / "video.mp4", directory / "audio.wav")
 
     def extract_audio(self, paths):
+        self.extracted.append(paths.work_dir.name)
         paths.audio.write_bytes(b"audio")
 
     def cleanup(self, work_dir):
@@ -51,7 +55,7 @@ class FakeTranscriber:
         return TranscriptResult("你好世界", (TranscriptSegment(0, 1, "你好世界"),), "fake", "tiny", "zh")
 
 
-def build(tmp_path, favorites, failures=None):
+def build(tmp_path, favorites, failures=None, classifier=None):
     manifest = ManifestStore(tmp_path / "manifest.json")
     manifest.discover(favorites)
     media = FakeMedia(tmp_path / "tmp")
@@ -64,8 +68,27 @@ def build(tmp_path, favorites, failures=None):
         acquirer=acquirer,
         transcriber=transcriber,
         probe=lambda _paths: MediaInfo(duration_seconds=12.0, voiced_seconds=9.0),
+        classifier=classifier,
     )
     return pipeline, manifest, media, acquirer, transcriber
+
+
+class FakeClassifier:
+    version = "fake-v1"
+
+    def __init__(self, decisions):
+        self.decisions = decisions
+        self.calls = []
+
+    def classify(self, metadata):
+        self.calls.append(metadata.caption)
+        eligibility = self.decisions.get(metadata.caption, Eligibility.EXCLUDE)
+        return EligibilityDecision(
+            eligibility=eligibility,
+            reasons=("fake_keep" if eligibility is Eligibility.KEEP else "fake_exclude",),
+            classifier_version=self.version,
+            input_hash=f"hash:{metadata.caption}",
+        )
 
 
 def test_pipeline_persists_before_cleanup_and_reaches_cleaned(tmp_path, monkeypatch):
@@ -210,3 +233,70 @@ def test_non_acquisition_processing_error_counts_failed_without_detail(tmp_path)
     assert audit.counts == {"selected": 1, "failed": 1}
     assert audit.errors == {"transcription_failed": 1}
     assert "secret" not in repr(audit)
+
+
+def test_classifier_excludes_before_any_media_operation(tmp_path):
+    excluded = item("excluded")
+    classifier = FakeClassifier({excluded.caption: Eligibility.EXCLUDE})
+    pipeline, manifest, media, acquirer, transcriber = build(
+        tmp_path, [excluded], classifier=classifier
+    )
+
+    audit = pipeline.run()
+
+    assert manifest.get("excluded").eligibility is Eligibility.EXCLUDE
+    assert media.prepared == []
+    assert media.extracted == []
+    assert acquirer.calls == []
+    assert transcriber.calls == []
+    assert audit.counts == {
+        "classified": 1,
+        "eligible": 0,
+        "excluded": 1,
+        "selected": 0,
+    }
+    assert audit.reason_counts == {"fake_exclude": 1}
+
+
+def test_classifier_keeps_video_and_preserves_pipeline_behavior(tmp_path):
+    kept = item("kept")
+    classifier = FakeClassifier({kept.caption: Eligibility.KEEP})
+    pipeline, manifest, media, acquirer, transcriber = build(
+        tmp_path, [kept], classifier=classifier
+    )
+
+    audit = pipeline.run()
+
+    assert manifest.get("kept").eligibility is Eligibility.KEEP
+    assert media.prepared == ["kept"]
+    assert acquirer.calls == ["kept"]
+    assert len(transcriber.calls) == 1
+    assert audit.counts == {
+        "classified": 1,
+        "eligible": 1,
+        "excluded": 0,
+        "selected": 1,
+        "persisted": 1,
+        "cleaned": 1,
+    }
+
+
+def test_classifier_failure_stops_before_processing_without_private_detail(tmp_path):
+    class BrokenClassifier:
+        version = "broken-v1"
+
+        def classify(self, _metadata):
+            raise RuntimeError("private caption and provider details")
+
+    pipeline, manifest, media, acquirer, _ = build(
+        tmp_path, [item("one")], classifier=BrokenClassifier()
+    )
+
+    audit = pipeline.run()
+
+    assert audit.stopped is True
+    assert audit.errors == {"classification_failed": 1}
+    assert "private" not in repr(audit)
+    assert manifest.get("one").eligibility is None
+    assert media.prepared == []
+    assert acquirer.calls == []

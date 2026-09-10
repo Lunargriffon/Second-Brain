@@ -10,6 +10,11 @@ import os
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol
 
+from .eligibility import (
+    Eligibility,
+    KnowledgeValueClassifier,
+    VideoMetadata,
+)
 from .manifest import ManifestStore
 from .media import AcquisitionDisposition, AcquisitionFailure, MediaPaths
 from .models import DouyinRawRecord, FavoriteItem, Stage
@@ -28,6 +33,7 @@ class RunAudit:
     errors: dict[str, int] = field(default_factory=dict)
     stopped: bool = False
     cleanup_pending: int = 0
+    reason_counts: dict[str, int] = field(default_factory=dict)
 
 
 class MediaManager(Protocol):
@@ -82,6 +88,7 @@ class DouyinPipeline:
         acquirer: Acquirer,
         transcriber: Transcriber,
         probe: Callable[[MediaPaths], MediaInfo],
+        classifier: KnowledgeValueClassifier | None = None,
     ) -> None:
         self.manifest = manifest
         self.raw_store = raw_store
@@ -89,11 +96,49 @@ class DouyinPipeline:
         self.acquirer = acquirer
         self.transcriber = transcriber
         self.probe = probe
+        self.classifier = classifier
 
     def run(self) -> RunAudit:
-        pending_items = self.manifest.pending()
-        counts: Counter[str] = Counter({"selected": len(pending_items)})
+        counts: Counter[str] = Counter()
         errors: Counter[str] = Counter()
+        reason_counts: Counter[str] = Counter()
+        if self.classifier is not None:
+            try:
+                for entry in self.manifest.items():
+                    decision = self.classifier.classify(
+                        VideoMetadata(
+                            caption=entry.caption,
+                            hashtags=entry.hashtags,
+                            author=entry.author,
+                        )
+                    )
+                    if self.manifest.needs_classification(
+                        entry.work_id,
+                        decision.classifier_version,
+                        decision.input_hash,
+                    ):
+                        self.manifest.set_eligibility(entry.work_id, decision)
+                classified = self.manifest.items()
+            except Exception:
+                return RunAudit(
+                    counts={},
+                    errors={"classification_failed": 1},
+                    stopped=True,
+                    cleanup_pending=0,
+                )
+            counts["classified"] = len(classified)
+            counts["eligible"] = sum(
+                entry.eligibility is Eligibility.KEEP for entry in classified
+            )
+            counts["excluded"] = sum(
+                entry.eligibility is Eligibility.EXCLUDE for entry in classified
+            )
+            for entry in classified:
+                if entry.eligibility is Eligibility.EXCLUDE:
+                    reason_counts.update(entry.eligibility_reasons)
+
+        pending_items = self.manifest.pending()
+        counts["selected"] = len(pending_items)
         stopped = False
 
         for pending in pending_items:
@@ -152,7 +197,13 @@ class DouyinPipeline:
             entry.stage in {Stage.PERSISTED, Stage.INDEXED}
             for entry in self.manifest.items()
         )
-        return RunAudit(dict(counts), dict(errors), stopped, cleanup_pending)
+        return RunAudit(
+            dict(counts),
+            dict(errors),
+            stopped,
+            cleanup_pending,
+            dict(reason_counts),
+        )
 
     @staticmethod
     def _phase_error(stage: Stage) -> str:
