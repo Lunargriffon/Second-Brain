@@ -157,6 +157,7 @@ def test_douyin_all_selects_full_runner(monkeypatch, tmp_path, capsys):
 
 def test_douyin_all_does_not_publish_when_kept_items_failed(monkeypatch, tmp_path):
     calls = []
+    report = tmp_path / "audit.json"
     monkeypatch.setattr(
         "pkb.cli.run_douyin_full",
         lambda **_: SimpleNamespace(
@@ -176,7 +177,9 @@ def test_douyin_all_does_not_publish_when_kept_items_failed(monkeypatch, tmp_pat
         lambda: calls.append("refresh") or (True, True),
     )
 
-    assert main(["export", "douyin-favorites", "--all"]) == 1
+    assert main(
+        ["export", "douyin-favorites", "--all", "--report", str(report)]
+    ) == 1
     assert calls == []
 
 
