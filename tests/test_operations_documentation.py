@@ -70,6 +70,8 @@ def test_operations_guide_covers_bounded_douyin_trial_and_recovery():
         "cleanup_pending",
         "30-second chunks",
         "completed chunks",
+        "media_url_unavailable",
+        "two consecutive runs",
         "five speech-bearing transcripts",
     ):
         assert required in text

@@ -31,7 +31,7 @@ _NEXT: dict[Stage, set[Stage]] = {
     Stage.TRANSCRIBED: {Stage.PERSISTED, Stage.FAILED},
     Stage.PERSISTED: {Stage.INDEXED, Stage.CLEANED},
     Stage.INDEXED: {Stage.CLEANED},
-    Stage.FAILED: {Stage.DISCOVERED},
+    Stage.FAILED: {Stage.DISCOVERED, Stage.UNAVAILABLE},
     Stage.CLEANED: set(),
     Stage.UNAVAILABLE: set(),
 }
@@ -92,6 +92,8 @@ class FavoriteItem:
     eligibility_reasons: tuple[str, ...] = ()
     classifier_version: str | None = None
     classification_input_hash: str | None = None
+    last_failure_code: str | None = None
+    consecutive_failure_count: int = 0
 
     def __post_init__(self) -> None:
         _validate_id(self.work_id, "work_id")
@@ -113,6 +115,11 @@ class FavoriteItem:
             or not self.classification_input_hash
         ):
             raise ValueError("classification fields must be set together")
+        if self.last_failure_code is None:
+            if self.consecutive_failure_count != 0:
+                raise ValueError("failure evidence must be set together")
+        elif not self.last_failure_code.strip() or self.consecutive_failure_count < 1:
+            raise ValueError("failure evidence must be set together")
 
     def transition(self, target: Stage) -> FavoriteItem:
         target = Stage(target)
@@ -129,6 +136,25 @@ class FavoriteItem:
             classification_input_hash=decision.input_hash,
         )
 
+    def with_failure(self, code: str) -> FavoriteItem:
+        code = code.strip()
+        if not code:
+            raise ValueError("failure code must not be empty")
+        failed = self if self.stage is Stage.FAILED else self.transition(Stage.FAILED)
+        count = (
+            failed.consecutive_failure_count + 1
+            if failed.last_failure_code == code
+            else 1
+        )
+        return replace(
+            failed,
+            last_failure_code=code,
+            consecutive_failure_count=count,
+        )
+
+    def without_failure(self) -> FavoriteItem:
+        return replace(self, last_failure_code=None, consecutive_failure_count=0)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "work_id": self.work_id,
@@ -144,6 +170,8 @@ class FavoriteItem:
             "eligibility_reasons": list(self.eligibility_reasons),
             "classifier_version": self.classifier_version,
             "classification_input_hash": self.classification_input_hash,
+            "last_failure_code": self.last_failure_code,
+            "consecutive_failure_count": self.consecutive_failure_count,
         }
 
     @classmethod
@@ -176,6 +204,12 @@ class FavoriteItem:
                 if value.get("classification_input_hash") is None
                 else str(value["classification_input_hash"])
             ),
+            last_failure_code=(
+                None
+                if value.get("last_failure_code") is None
+                else str(value["last_failure_code"])
+            ),
+            consecutive_failure_count=int(value.get("consecutive_failure_count", 0)),
         )
 
 

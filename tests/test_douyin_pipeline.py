@@ -154,6 +154,20 @@ def test_unavailable_is_terminal_but_next_item_continues(tmp_path):
     }
 
 
+def test_repeated_missing_media_becomes_explicitly_unavailable(tmp_path):
+    pipeline, manifest, _, _, _ = build(
+        tmp_path, [item("gone")], {"gone": "media_url_unavailable"}
+    )
+
+    first = pipeline.run()
+    second = pipeline.run()
+
+    assert first.counts == {"selected": 1, "failed": 1}
+    assert second.counts == {"selected": 1, "unavailable": 1}
+    assert manifest.get("gone").stage is Stage.UNAVAILABLE
+    assert manifest.get("gone").consecutive_failure_count == 2
+
+
 def test_persisted_item_resumes_cleanup_without_duplicate_or_retranscription(tmp_path):
     pipeline, manifest, media, _, transcriber = build(tmp_path, [item()])
     manifest.update("one", Stage.ACQUIRED)

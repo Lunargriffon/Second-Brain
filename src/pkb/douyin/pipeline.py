@@ -21,6 +21,10 @@ from .models import DouyinRawRecord, FavoriteItem, Stage
 from .transcription import TranscriptResult
 
 
+_STABLE_UNAVAILABLE_CODES = {"media_url_unavailable"}
+_STABLE_UNAVAILABLE_ATTEMPTS = 2
+
+
 @dataclass(frozen=True)
 class MediaInfo:
     duration_seconds: float
@@ -180,13 +184,22 @@ class DouyinPipeline:
                     self.manifest.update(item.work_id, Stage.UNAVAILABLE)
                     counts["unavailable"] += 1
                 else:
-                    self._mark_failed(item)
-                    counts["failed"] += 1
+                    failed = self._mark_failed(item, exc.code)
+                    if (
+                        exc.code in _STABLE_UNAVAILABLE_CODES
+                        and failed.consecutive_failure_count
+                        >= _STABLE_UNAVAILABLE_ATTEMPTS
+                    ):
+                        self.manifest.update(item.work_id, Stage.UNAVAILABLE)
+                        counts["unavailable"] += 1
+                    else:
+                        counts["failed"] += 1
                     stopped = exc.disposition is AcquisitionDisposition.STOP_RUN
                 continue
             except Exception:
-                errors[self._phase_error(item.stage)] += 1
-                self._mark_failed(item)
+                code = self._phase_error(item.stage)
+                errors[code] += 1
+                self._mark_failed(item, code)
                 counts["failed"] += 1
                 continue
 
@@ -222,9 +235,10 @@ class DouyinPipeline:
             Stage.TRANSCRIBED: "persistence_failed",
         }.get(stage, "processing_failed")
 
-    def _mark_failed(self, item: FavoriteItem) -> None:
+    def _mark_failed(self, item: FavoriteItem, code: str) -> FavoriteItem:
         if item.stage in {Stage.DISCOVERED, Stage.ACQUIRED, Stage.AUDIO_READY, Stage.TRANSCRIBED}:
-            self.manifest.update(item.work_id, Stage.FAILED)
+            return self.manifest.record_failure(item.work_id, code)
+        return self.manifest.get(item.work_id)
 
     @staticmethod
     def _record(

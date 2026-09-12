@@ -24,7 +24,7 @@ class ManifestStore:
         if not self.path.exists():
             return []
         payload = json.loads(self.path.read_text(encoding="utf-8"))
-        if payload.get("version") not in {1, 2}:
+        if payload.get("version") not in {1, 2, 3}:
             raise ValueError("unsupported manifest version")
         return [FavoriteItem.from_dict(value) for value in payload.get("items", [])]
 
@@ -91,6 +91,18 @@ class ManifestStore:
         for index, entry in enumerate(entries):
             if entry.work_id == work_id:
                 updated = entry.transition(stage)
+                if stage is Stage.CLEANED:
+                    updated = updated.without_failure()
+                entries[index] = updated
+                self._save(entries)
+                return updated
+        raise KeyError(work_id)
+
+    def record_failure(self, work_id: str, code: str) -> FavoriteItem:
+        entries = self.items()
+        for index, entry in enumerate(entries):
+            if entry.work_id == work_id:
+                updated = entry.with_failure(code)
                 entries[index] = updated
                 self._save(entries)
                 return updated
@@ -112,7 +124,7 @@ class ManifestStore:
     def _save(self, entries: Iterable[FavoriteItem]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temp = self.path.with_suffix(self.path.suffix + ".tmp")
-        payload = {"version": 2, "items": [entry.to_dict() for entry in entries]}
+        payload = {"version": 3, "items": [entry.to_dict() for entry in entries]}
         temp.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",

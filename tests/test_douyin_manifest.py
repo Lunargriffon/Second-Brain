@@ -27,7 +27,7 @@ def test_manifest_round_trip_and_idempotent_discovery(tmp_path):
     store.discover([item("1"), item("1"), item("2")])
 
     assert [entry.work_id for entry in ManifestStore(store.path).items()] == ["1", "2"]
-    assert json.loads(store.path.read_text(encoding="utf-8"))["version"] == 2
+    assert json.loads(store.path.read_text(encoding="utf-8"))["version"] == 3
 
 
 def test_manifest_reads_version_one_and_migrates_on_next_write(tmp_path):
@@ -41,7 +41,32 @@ def test_manifest_reads_version_one_and_migrates_on_next_write(tmp_path):
     assert store.get("1").eligibility is None
     store.discover([item("2")])
 
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 2
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 3
+
+
+def test_manifest_persists_consecutive_failure_evidence(tmp_path):
+    store = ManifestStore(tmp_path / "state.json")
+    store.discover([item("1")])
+
+    first = store.record_failure("1", "media_url_unavailable")
+    store.update("1", Stage.DISCOVERED)
+    second = store.record_failure("1", "media_url_unavailable")
+
+    assert first.consecutive_failure_count == 1
+    assert second.consecutive_failure_count == 2
+    assert ManifestStore(store.path).get("1").last_failure_code == "media_url_unavailable"
+
+
+def test_different_failure_code_restarts_consecutive_count(tmp_path):
+    store = ManifestStore(tmp_path / "state.json")
+    store.discover([item("1")])
+    store.record_failure("1", "media_url_unavailable")
+    store.update("1", Stage.DISCOVERED)
+
+    changed = store.record_failure("1", "browser_media_failed")
+
+    assert changed.last_failure_code == "browser_media_failed"
+    assert changed.consecutive_failure_count == 1
 
 
 def test_manifest_atomic_write_preserves_old_file_on_replace_failure(tmp_path, monkeypatch):

@@ -24,6 +24,28 @@ def test_stage_transition_is_explicit_and_serializable():
     assert FavoriteItem.from_dict(acquired.to_dict()) == acquired
 
 
+def test_failure_evidence_round_trips_and_allows_terminal_unavailable():
+    failed = FavoriteItem.from_dict(
+        {
+            **item().to_dict(),
+            "stage": "failed",
+            "last_failure_code": "media_url_unavailable",
+            "consecutive_failure_count": 2,
+        }
+    )
+
+    assert FavoriteItem.from_dict(failed.to_dict()) == failed
+    assert failed.transition(Stage.UNAVAILABLE).stage is Stage.UNAVAILABLE
+
+
+def test_failure_evidence_must_be_complete():
+    values = item().to_dict()
+    values["consecutive_failure_count"] = 1
+
+    with pytest.raises(ValueError, match="failure evidence"):
+        FavoriteItem.from_dict(values)
+
+
 def test_favorite_item_round_trips_eligibility_decision():
     decision = EligibilityDecision(
         eligibility=Eligibility.KEEP,
