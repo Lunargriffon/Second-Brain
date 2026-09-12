@@ -52,6 +52,13 @@ durable storage. The audit is written atomically to
 `data/state/douyin-favorites.audit.json`; `cleanup_pending=0` confirms that no
 persisted item still has temporary media waiting for deletion.
 
+Speech recognition processes long recordings in 30-second chunks. Each successful
+chunk is checkpointed atomically beside the temporary WAV, so an interrupted run
+resumes after the completed chunks instead of retranscribing the recording from
+the beginning. Keep the temporary media root intact when recovering; rerun the
+identical command and the checkpoint is accepted only when the audio file, model,
+and chunk settings still match.
+
 If the command reports `auth_required`, log into Douyin in Chrome and run the
 same command again. `captcha`, `http_403`, and `http_429` are safe stop signals:
 complete any visible challenge yourself, wait before retrying, and do not try to

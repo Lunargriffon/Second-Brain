@@ -14,13 +14,26 @@ from pkb.douyin.transcription import TranscriptResult
 from pkb.douyin.live import (
     OpenCliFavoritesBrowser,
     YtDlpAcquirer,
+    _build_pipeline,
     run_live_full,
     write_audit_atomic,
 )
+from pkb.douyin.transcription import ResumableChunkedEngine
 from pkb.douyin.collector import CollectionStopped, FavoritePage
 from pkb.knowledge.indexer import KnowledgeIndexer
 from pkb.knowledge.repository import KnowledgeRepository
 from pkb.knowledge.search import SearchIndex
+
+
+def test_live_pipeline_uses_resumable_chunked_transcription(tmp_path):
+    pipeline = _build_pipeline(
+        ManifestStore(tmp_path / "state.json"),
+        tmp_path / "raw.jsonl",
+        tmp_path / "media",
+    )
+
+    assert isinstance(pipeline.transcriber.primary, ResumableChunkedEngine)
+    assert isinstance(pipeline.transcriber.fallback, ResumableChunkedEngine)
 
 
 class OfflineMedia:

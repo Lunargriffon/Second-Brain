@@ -68,6 +68,8 @@ def test_operations_guide_covers_bounded_douyin_trial_and_recovery():
         "http_403",
         "http_429",
         "cleanup_pending",
+        "30-second chunks",
+        "completed chunks",
         "five speech-bearing transcripts",
     ):
         assert required in text

@@ -6,10 +6,87 @@ from pkb.douyin.models import TranscriptSegment
 from pkb.douyin.transcription import (
     FallbackTranscriber,
     FasterWhisperEngine,
+    ResumableChunkedEngine,
     SenseVoiceEngine,
     TranscriptResult,
     is_usable,
 )
+
+
+class ChunkEngine:
+    model_name = "chunk-model"
+
+    def __init__(self, *, fail_once_at: int | None = None) -> None:
+        self.calls: list[int] = []
+        self.fail_once_at = fail_once_at
+
+    def transcribe(self, audio_path: Path) -> TranscriptResult:
+        chunk_index = int(audio_path.stem.rsplit("-", 1)[1])
+        self.calls.append(chunk_index)
+        if self.fail_once_at == chunk_index:
+            self.fail_once_at = None
+            raise RuntimeError("interrupted")
+        return TranscriptResult(
+            text=f"part {chunk_index}",
+            segments=(TranscriptSegment(1.0, 2.0, f"part {chunk_index}"),),
+            engine="sensevoice",
+            model=self.model_name,
+            language="zh",
+        )
+
+
+def write_fake_chunk(source: Path, destination: Path, start: float, duration: float) -> None:
+    assert source.name == "audio.wav"
+    destination.write_text(f"{start}:{duration}", encoding="utf-8")
+
+
+def test_chunked_engine_combines_results_with_absolute_timestamps(tmp_path):
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"audio")
+    inner = ChunkEngine()
+    engine = ResumableChunkedEngine(
+        inner,
+        chunk_seconds=30,
+        duration_probe=lambda _path: 65,
+        chunk_writer=write_fake_chunk,
+    )
+
+    got = engine.transcribe(audio)
+
+    assert inner.calls == [0, 1, 2]
+    assert got.text == "part 0 part 1 part 2"
+    assert got.segments == (
+        TranscriptSegment(1.0, 2.0, "part 0"),
+        TranscriptSegment(31.0, 32.0, "part 1"),
+        TranscriptSegment(61.0, 62.0, "part 2"),
+    )
+
+
+def test_chunked_engine_resumes_after_last_durable_chunk(tmp_path):
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"audio")
+    first = ChunkEngine(fail_once_at=1)
+    first_run = ResumableChunkedEngine(
+        first,
+        chunk_seconds=30,
+        duration_probe=lambda _path: 65,
+        chunk_writer=write_fake_chunk,
+    )
+
+    with pytest.raises(RuntimeError, match="interrupted"):
+        first_run.transcribe(audio)
+
+    resumed = ChunkEngine()
+    got = ResumableChunkedEngine(
+        resumed,
+        chunk_seconds=30,
+        duration_probe=lambda _path: 65,
+        chunk_writer=write_fake_chunk,
+    ).transcribe(audio)
+
+    assert first.calls == [0, 1]
+    assert resumed.calls == [1, 2]
+    assert got.text == "part 0 part 1 part 2"
 
 
 def result(text: str, *, engine: str = "sensevoice") -> TranscriptResult:

@@ -18,7 +18,12 @@ from .media import AcquisitionFailure, TemporaryMedia
 from .models import FavoriteItem
 from .pipeline import DouyinPipeline, DurableJsonlStore, MediaInfo, RunAudit
 from .rebuild import invalidate_empty_kept_records, rebuild_filtered_corpus
-from .transcription import FallbackTranscriber, FasterWhisperEngine, SenseVoiceEngine
+from .transcription import (
+    FallbackTranscriber,
+    FasterWhisperEngine,
+    ResumableChunkedEngine,
+    SenseVoiceEngine,
+)
 from pkb.opencli_gateway import OpenCliError, OpenCliGateway
 
 
@@ -260,7 +265,10 @@ def _build_pipeline(
         raw_store=DurableJsonlStore(output),
         media=TemporaryMedia(temp_root),
         acquirer=YtDlpAcquirer(),
-        transcriber=FallbackTranscriber(SenseVoiceEngine(), FasterWhisperEngine()),
+        transcriber=FallbackTranscriber(
+            ResumableChunkedEngine(SenseVoiceEngine()),
+            ResumableChunkedEngine(FasterWhisperEngine()),
+        ),
         probe=probe_audio,
         classifier=RuleBasedKnowledgeValueClassifier(),
         force_reclassify=reclassify,
