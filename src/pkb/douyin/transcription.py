@@ -48,7 +48,10 @@ class FallbackTranscriber:
         primary_result = self.primary.transcribe(audio_path)
         if is_usable(primary_result, voiced_seconds):
             return primary_result
-        return self.fallback.transcribe(audio_path)
+        fallback_result = self.fallback.transcribe(audio_path)
+        if not is_usable(fallback_result, voiced_seconds):
+            raise ValueError("unusable_transcript")
+        return fallback_result
 
 
 class SenseVoiceEngine:

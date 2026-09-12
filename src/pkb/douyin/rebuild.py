@@ -12,6 +12,7 @@ from typing import Mapping
 
 from .eligibility import Eligibility
 from .manifest import ManifestStore
+from .models import Stage
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,87 @@ def _unique_backup_path(backup_root: Path, raw_path: Path, now: datetime) -> Pat
         candidate = backup_root / f"{raw_path.stem}.{stamp}.{suffix}.bak.jsonl"
         suffix += 1
     return candidate
+
+
+def invalidate_empty_kept_records(
+    raw_path: Path,
+    manifest: ManifestStore,
+    backup_root: Path,
+    *,
+    now: datetime | None = None,
+) -> int:
+    """Quarantine invalid kept output and make cleaned items retryable again."""
+
+    raw_path = Path(raw_path)
+    if not raw_path.exists():
+        return 0
+    entries = manifest.items()
+    decisions = {entry.work_id: entry.eligibility for entry in entries}
+    raw_lines = raw_path.read_bytes().splitlines(keepends=True)
+    parsed: list[tuple[str, bytes, Mapping[str, object]]] = []
+    seen: set[str] = set()
+    for index, raw_line in enumerate(raw_lines, 1):
+        if not raw_line.strip():
+            continue
+        try:
+            value = json.loads(raw_line.decode("utf-8-sig" if index == 1 else "utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("invalid raw JSONL") from exc
+        if not isinstance(value, Mapping) or not str(value.get("work_id", "")):
+            raise ValueError("raw record is missing work ID")
+        work_id = str(value["work_id"])
+        if work_id in seen:
+            raise ValueError(f"duplicate work ID: {work_id}")
+        if work_id not in decisions:
+            raise ValueError("raw record is absent from manifest")
+        seen.add(work_id)
+        parsed.append((work_id, raw_line, value))
+
+    invalid = {
+        work_id
+        for work_id, _raw_line, value in parsed
+        if decisions[work_id] is Eligibility.KEEP
+        and not str(value.get("transcript_text", "")).strip()
+    }
+    invalid.update(
+        entry.work_id
+        for entry in entries
+        if entry.eligibility is Eligibility.KEEP
+        and entry.stage is Stage.CLEANED
+        and entry.work_id not in seen
+    )
+    if not invalid:
+        return 0
+
+    backup_root = Path(backup_root)
+    backup_root.mkdir(parents=True, exist_ok=True)
+    timestamp = now or datetime.now(timezone.utc)
+    stamp = timestamp.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    raw_backup = backup_root / f"{raw_path.stem}.{stamp}.invalid.bak.jsonl"
+    suffix = 1
+    while raw_backup.exists():
+        raw_backup = backup_root / (
+            f"{raw_path.stem}.{stamp}.{suffix}.invalid.bak.jsonl"
+        )
+        suffix += 1
+    shutil.copy2(raw_path, raw_backup)
+    if manifest.path.exists():
+        shutil.copy2(manifest.path, raw_backup.with_suffix(".manifest.json"))
+
+    temporary = raw_path.with_suffix(raw_path.suffix + ".invalid.tmp")
+    with temporary.open("wb") as stream:
+        for work_id, raw_line, _value in parsed:
+            if work_id not in invalid:
+                stream.write(raw_line.rstrip(b"\r\n") + b"\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    temporary.replace(raw_path)
+
+    for work_id in sorted(invalid):
+        entry = manifest.get(work_id)
+        if entry.stage is Stage.CLEANED:
+            manifest.reset_for_reprocessing(work_id)
+    return len(invalid)
 
 
 def rebuild_filtered_corpus(
@@ -68,8 +150,11 @@ def rebuild_filtered_corpus(
             raise ValueError("raw record is absent from manifest")
         parsed.append((work_id, raw_line, value))
 
-    for _work_id, _raw_line, value in parsed:
-        if not str(value.get("transcript_text", "")).strip():
+    for work_id, _raw_line, value in parsed:
+        if (
+            decisions[work_id] is Eligibility.KEEP
+            and not str(value.get("transcript_text", "")).strip()
+        ):
             raise ValueError("raw record has empty transcript")
 
     kept_lines = [

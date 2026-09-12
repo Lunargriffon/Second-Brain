@@ -17,7 +17,7 @@ from .manifest import ManifestStore
 from .media import AcquisitionFailure, TemporaryMedia
 from .models import FavoriteItem
 from .pipeline import DouyinPipeline, DurableJsonlStore, MediaInfo, RunAudit
-from .rebuild import rebuild_filtered_corpus
+from .rebuild import invalidate_empty_kept_records, rebuild_filtered_corpus
 from .transcription import FallbackTranscriber, FasterWhisperEngine, SenseVoiceEngine
 from pkb.opencli_gateway import OpenCliError, OpenCliGateway
 
@@ -208,14 +208,17 @@ class YtDlpAcquirer:
                 if not isinstance(aweme, Mapping) or str(aweme.get("aweme_id")) != work_id:
                     continue
                 video = aweme.get("video")
-                play = video.get("play_addr") if isinstance(video, Mapping) else None
-                urls = play.get("url_list") if isinstance(play, Mapping) else None
-                if isinstance(urls, list):
-                    for value in urls:
-                        if isinstance(value, str):
-                            parsed = urlparse(value)
-                            if parsed.scheme == "https" and parsed.netloc:
-                                return value
+                if not isinstance(video, Mapping):
+                    continue
+                for address_name in ("download_addr", "play_addr"):
+                    address = video.get(address_name)
+                    urls = address.get("url_list") if isinstance(address, Mapping) else None
+                    if isinstance(urls, list):
+                        for value in urls:
+                            if isinstance(value, str):
+                                parsed = urlparse(value)
+                                if parsed.scheme == "https" and parsed.netloc:
+                                    return value
         raise AcquisitionFailure("media_url_unavailable")
 
 
@@ -294,12 +297,19 @@ def run_live_full(
             known_ids=known,
             on_discovered=manifest.discover,
         )
+        invalidated = invalidate_empty_kept_records(
+            output,
+            manifest,
+            _douyin_backup_root(output),
+        )
         pipeline = (
             pipeline_factory(manifest)
             if pipeline_factory is not None
             else _build_pipeline(manifest, output, temp_root, reclassify=reclassify)
         )
         run = pipeline.run()
+        if invalidated:
+            run.counts["invalid_transcripts_requeued"] = invalidated
         if not run.stopped:
             rebuild = rebuild_filtered_corpus(
                 output,

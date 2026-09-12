@@ -423,7 +423,12 @@ def test_downloader_extracts_https_media_from_captured_detail_for_blob_video(tmp
                 "body": {
                     "aweme_detail": {
                         "aweme_id": favorite.work_id,
-                        "video": {"play_addr": {"url_list": ["https://cdn.example/blob.mp4"]}},
+                        "video": {
+                            "download_addr": {
+                                "url_list": ["https://www.douyin.com/aweme/v1/play/stable"]
+                            },
+                            "play_addr": {"url_list": ["https://cdn.example/expired.mp4"]},
+                        },
                     }
                 },
             }
@@ -440,7 +445,8 @@ def test_downloader_extracts_https_media_from_captured_detail_for_blob_video(tmp
     )
 
     direct_download = next(command for command in calls if command[0] == "yt-dlp" and "--add-header" in command)
-    assert "https://cdn.example/blob.mp4" in direct_download
+    assert "https://www.douyin.com/aweme/v1/play/stable" in direct_download
+    assert "https://cdn.example/expired.mp4" not in direct_download
     assert f"Referer:{favorite.url}" in direct_download
     assert calls[-1] == [
         "opencli",

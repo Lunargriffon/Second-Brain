@@ -235,6 +235,23 @@ def test_non_acquisition_processing_error_counts_failed_without_detail(tmp_path)
     assert "secret" not in repr(audit)
 
 
+def test_failed_item_with_durable_audio_resumes_transcription_without_download(tmp_path):
+    pipeline, manifest, media, acquirer, transcriber = build(tmp_path, [item()])
+    paths = media.prepare("one")
+    paths.video.write_bytes(b"video")
+    paths.audio.write_bytes(b"audio")
+    manifest.update("one", Stage.FAILED)
+    media.prepared.clear()
+
+    audit = pipeline.run()
+
+    assert acquirer.calls == []
+    assert media.extracted == []
+    assert transcriber.calls == [("one", 9.0)]
+    assert manifest.get("one").stage is Stage.CLEANED
+    assert audit.counts == {"selected": 1, "persisted": 1, "cleaned": 1}
+
+
 def test_classifier_excludes_before_any_media_operation(tmp_path):
     excluded = item("excluded")
     classifier = FakeClassifier({excluded.caption: Eligibility.EXCLUDE})

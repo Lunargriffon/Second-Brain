@@ -126,6 +126,16 @@ def test_discovery_refreshes_metadata_without_resetting_media_stage(tmp_path):
     assert store.get("1").stage is Stage.ACQUIRED
 
 
+def test_invalid_cleaned_item_can_be_reset_for_reprocessing(tmp_path):
+    store = ManifestStore(tmp_path / "state.json")
+    store.discover([item("1", stage=Stage.CLEANED)])
+
+    reset = store.reset_for_reprocessing("1")
+
+    assert reset.stage is Stage.FAILED
+    assert store.get("1").stage is Stage.FAILED
+
+
 def decision(eligibility: Eligibility, input_hash: str) -> EligibilityDecision:
     return EligibilityDecision(
         eligibility=eligibility,

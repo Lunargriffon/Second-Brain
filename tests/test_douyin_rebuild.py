@@ -5,8 +5,8 @@ import pytest
 
 from pkb.douyin.eligibility import Eligibility, EligibilityDecision
 from pkb.douyin.manifest import ManifestStore
-from pkb.douyin.models import FavoriteItem
-from pkb.douyin.rebuild import rebuild_filtered_corpus
+from pkb.douyin.models import FavoriteItem, Stage
+from pkb.douyin.rebuild import invalidate_empty_kept_records, rebuild_filtered_corpus
 
 
 NOW = datetime(2026, 9, 10, 8, 9, 10, tzinfo=timezone.utc)
@@ -106,3 +106,60 @@ def test_rebuild_rejects_duplicate_or_empty_transcript_before_replacement(tmp_pa
 
     assert raw.read_text(encoding="utf-8") == original
     assert not (tmp_path / "backups").exists()
+
+
+def test_rebuild_rejects_empty_kept_transcript_before_replacement(tmp_path):
+    raw = tmp_path / "douyin-favorites.jsonl"
+    original = line("one", "") + "\n"
+    raw.write_text(original, encoding="utf-8")
+    manifest = ManifestStore(tmp_path / "state.json")
+    manifest.discover([item("one")])
+    classify(manifest, "one", Eligibility.KEEP)
+
+    with pytest.raises(ValueError, match="empty transcript"):
+        rebuild_filtered_corpus(raw, manifest, tmp_path / "backups", now=NOW)
+
+    assert raw.read_text(encoding="utf-8") == original
+    assert not (tmp_path / "backups").exists()
+
+
+def test_rebuild_removes_empty_excluded_record_with_the_other_exclusions(tmp_path):
+    raw = tmp_path / "douyin-favorites.jsonl"
+    original_keep = line("keep")
+    raw.write_text(original_keep + "\n" + line("exclude", "") + "\n", encoding="utf-8")
+    manifest = ManifestStore(tmp_path / "state.json")
+    manifest.discover([item("keep"), item("exclude")])
+    classify(manifest, "keep", Eligibility.KEEP)
+    classify(manifest, "exclude", Eligibility.EXCLUDE)
+
+    report = rebuild_filtered_corpus(raw, manifest, tmp_path / "backups", now=NOW)
+
+    assert report.removed == 1
+    assert raw.read_text(encoding="utf-8") == original_keep + "\n"
+
+
+def test_empty_kept_record_is_backed_up_removed_and_reset_for_retry(tmp_path):
+    raw = tmp_path / "douyin-favorites.jsonl"
+    original = line("good") + "\n" + line("bad", "") + "\n"
+    raw.write_text(original, encoding="utf-8")
+    manifest = ManifestStore(tmp_path / "state.json")
+    manifest.discover([item("good"), item("bad")])
+    classify(manifest, "good", Eligibility.KEEP)
+    classify(manifest, "bad", Eligibility.KEEP)
+    for work_id in ("good", "bad"):
+        manifest.update(work_id, Stage.ACQUIRED)
+        manifest.update(work_id, Stage.AUDIO_READY)
+        manifest.update(work_id, Stage.TRANSCRIBED)
+        manifest.update(work_id, Stage.PERSISTED)
+        manifest.update(work_id, Stage.CLEANED)
+
+    count = invalidate_empty_kept_records(
+        raw, manifest, tmp_path / "backups", now=NOW
+    )
+
+    assert count == 1
+    assert raw.read_text(encoding="utf-8") == line("good") + "\n"
+    assert manifest.get("bad").stage.value == "failed"
+    backups = list((tmp_path / "backups").glob("*.invalid.bak.jsonl"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == original

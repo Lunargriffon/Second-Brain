@@ -46,6 +46,13 @@ def test_bad_primary_uses_faster_whisper(text):
     assert fallback.calls == 1
 
 
+def test_bad_fallback_is_rejected_instead_of_persisting_empty_text():
+    transcriber = FallbackTranscriber(FakeEngine(result("")), FakeEngine(result("")))
+
+    with pytest.raises(ValueError, match="unusable_transcript"):
+        transcriber.transcribe(Path("a.wav"), voiced_seconds=8)
+
+
 def test_quality_gate_rejects_short_speech_but_allows_short_clip():
     terse = result("ok")
     assert not is_usable(terse, voiced_seconds=5)

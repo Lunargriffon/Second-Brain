@@ -96,6 +96,19 @@ class ManifestStore:
                 return updated
         raise KeyError(work_id)
 
+    def reset_for_reprocessing(self, work_id: str) -> FavoriteItem:
+        """Invalidate a terminal result after its durable output fails validation."""
+        entries = self.items()
+        for index, entry in enumerate(entries):
+            if entry.work_id == work_id:
+                if entry.stage is not Stage.CLEANED:
+                    raise ValueError("only cleaned items can be invalidated")
+                updated = replace(entry, stage=Stage.FAILED)
+                entries[index] = updated
+                self._save(entries)
+                return updated
+        raise KeyError(work_id)
+
     def _save(self, entries: Iterable[FavoriteItem]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temp = self.path.with_suffix(self.path.suffix + ".tmp")

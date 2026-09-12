@@ -147,9 +147,15 @@ class DouyinPipeline:
             if stopped:
                 break
             item = self.manifest.get(pending.work_id)
+            paths = self.media.prepare(item.work_id)
             if item.stage is Stage.FAILED:
                 item = self.manifest.update(item.work_id, Stage.DISCOVERED)
-            paths = self.media.prepare(item.work_id)
+                has_video = paths.video.is_file() and paths.video.stat().st_size > 0
+                has_audio = paths.audio.is_file() and paths.audio.stat().st_size > 0
+                if has_video or has_audio:
+                    item = self.manifest.update(item.work_id, Stage.ACQUIRED)
+                if has_audio:
+                    item = self.manifest.update(item.work_id, Stage.AUDIO_READY)
 
             try:
                 if item.stage is Stage.DISCOVERED:
