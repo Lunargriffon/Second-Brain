@@ -255,4 +255,3 @@ excluded/raw intersection to be empty.
 Run: `git status --short && git log -8 --oneline`
 Expected: no implementation files remain uncommitted; only existing ignored or
 untracked pytest temporary directories may remain.
-
