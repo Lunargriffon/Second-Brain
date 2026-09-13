@@ -18,10 +18,10 @@ from .eligibility import (
 from .manifest import ManifestStore
 from .media import AcquisitionDisposition, AcquisitionFailure, MediaPaths
 from .models import DouyinRawRecord, FavoriteItem, Stage
-from .transcription import TranscriptResult
+from .transcription import TranscriptResult, UnusableTranscriptError
 
 
-_STABLE_UNAVAILABLE_CODES = {"media_url_unavailable"}
+_STABLE_UNAVAILABLE_CODES = {"media_url_unavailable", "unusable_transcript"}
 _STABLE_UNAVAILABLE_ATTEMPTS = 2
 
 
@@ -195,6 +195,16 @@ class DouyinPipeline:
                     else:
                         counts["failed"] += 1
                     stopped = exc.disposition is AcquisitionDisposition.STOP_RUN
+                continue
+            except UnusableTranscriptError:
+                code = "unusable_transcript"
+                errors[code] += 1
+                failed = self._mark_failed(item, code)
+                if failed.consecutive_failure_count >= _STABLE_UNAVAILABLE_ATTEMPTS:
+                    self.manifest.update(item.work_id, Stage.UNAVAILABLE)
+                    counts["unavailable"] += 1
+                else:
+                    counts["failed"] += 1
                 continue
             except Exception:
                 code = self._phase_error(item.stage)

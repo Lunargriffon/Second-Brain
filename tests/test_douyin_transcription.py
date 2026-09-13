@@ -9,6 +9,7 @@ from pkb.douyin.transcription import (
     ResumableChunkedEngine,
     SenseVoiceEngine,
     TranscriptResult,
+    UnusableTranscriptError,
     is_usable,
 )
 
@@ -126,7 +127,7 @@ def test_bad_primary_uses_faster_whisper(text):
 def test_bad_fallback_is_rejected_instead_of_persisting_empty_text():
     transcriber = FallbackTranscriber(FakeEngine(result("")), FakeEngine(result("")))
 
-    with pytest.raises(ValueError, match="unusable_transcript"):
+    with pytest.raises(UnusableTranscriptError, match="unusable_transcript"):
         transcriber.transcribe(Path("a.wav"), voiced_seconds=8)
 
 

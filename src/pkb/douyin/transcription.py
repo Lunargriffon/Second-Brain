@@ -43,6 +43,10 @@ def is_usable(result: TranscriptResult, voiced_seconds: float) -> bool:
     return most_repeated / len(compact) < 0.8
 
 
+class UnusableTranscriptError(ValueError):
+    """Both transcription engines produced text rejected by the quality gate."""
+
+
 class FallbackTranscriber:
     def __init__(self, primary: TranscriptionEngine, fallback: TranscriptionEngine) -> None:
         self.primary = primary
@@ -54,7 +58,7 @@ class FallbackTranscriber:
             return primary_result
         fallback_result = self.fallback.transcribe(audio_path)
         if not is_usable(fallback_result, voiced_seconds):
-            raise ValueError("unusable_transcript")
+            raise UnusableTranscriptError("unusable_transcript")
         return fallback_result
 
 

@@ -6,7 +6,7 @@ from pkb.douyin.manifest import ManifestStore
 from pkb.douyin.media import AcquisitionFailure, MediaPaths
 from pkb.douyin.models import FavoriteItem, Stage, TranscriptSegment
 from pkb.douyin.pipeline import DouyinPipeline, DurableJsonlStore, MediaInfo
-from pkb.douyin.transcription import TranscriptResult
+from pkb.douyin.transcription import TranscriptResult, UnusableTranscriptError
 
 
 def item(work_id="one"):
@@ -166,6 +166,37 @@ def test_repeated_missing_media_becomes_explicitly_unavailable(tmp_path):
     assert second.counts == {"selected": 1, "unavailable": 1}
     assert manifest.get("gone").stage is Stage.UNAVAILABLE
     assert manifest.get("gone").consecutive_failure_count == 2
+
+
+def test_repeated_unusable_transcript_becomes_explicitly_unavailable(tmp_path):
+    pipeline, manifest, _, _, transcriber = build(tmp_path, [item("silent")])
+    transcriber.transcribe = lambda *_args: (_ for _ in ()).throw(
+        UnusableTranscriptError("unusable_transcript")
+    )
+
+    first = pipeline.run()
+    second = pipeline.run()
+
+    assert first.counts == {"selected": 1, "failed": 1}
+    assert second.counts == {"selected": 1, "unavailable": 1}
+    assert manifest.get("silent").stage is Stage.UNAVAILABLE
+    assert manifest.get("silent").last_failure_code == "unusable_transcript"
+    assert manifest.get("silent").consecutive_failure_count == 2
+
+
+def test_generic_transcription_exception_remains_retryable(tmp_path):
+    pipeline, manifest, _, _, transcriber = build(tmp_path, [item("error")])
+    transcriber.transcribe = lambda *_args: (_ for _ in ()).throw(
+        RuntimeError("temporary model error")
+    )
+
+    pipeline.run()
+    second = pipeline.run()
+
+    assert second.counts == {"selected": 1, "failed": 1}
+    assert manifest.get("error").stage is Stage.FAILED
+    assert manifest.get("error").last_failure_code == "transcription_failed"
+    assert manifest.get("error").consecutive_failure_count == 2
 
 
 def test_persisted_item_resumes_cleanup_without_duplicate_or_retranscription(tmp_path):

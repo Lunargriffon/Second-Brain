@@ -59,12 +59,15 @@ the beginning. Keep the temporary media root intact when recovering; rerun the
 identical command and the checkpoint is accepted only when the audio file, model,
 and chunk settings still match.
 
-A missing captured playback URL is reported as `media_url_unavailable`. The first
-occurrence remains retryable. If the same item produces that same code in
-two consecutive runs, its manifest entry becomes `unavailable` with the code and count
-retained as evidence. Browser, authentication, rate-limit, and transcription
-failures never use this terminal rule: they stay visible and retryable or stop the
-run according to their safe error code.
+A missing captured playback URL is reported as `media_url_unavailable`. An audio
+file whose primary and fallback transcription both fail the text-quality gate is
+reported as `unusable_transcript`. Each first occurrence remains retryable. If
+the same item produces the same one of these codes in two consecutive runs, its
+manifest entry becomes `unavailable`, retaining the code and count as evidence.
+This means no trustworthy transcript was produced; it does not mean the favorite
+itself was deleted. Browser, authentication, rate-limit, and other transcription
+failures never use this terminal rule: they stay visible and retryable or stop
+the run according to their safe error code.
 
 If the command reports `auth_required`, log into Douyin in Chrome and run the
 same command again. `captcha`, `http_403`, and `http_429` are safe stop signals:
